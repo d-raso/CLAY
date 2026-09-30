@@ -1,0 +1,212 @@
+// Flow Field Compute Shader
+// Generates a 2D flow field texture using noise and local affectors.
+// Output: RG16F texture where R=velocity.x, G=velocity.y
+
+#pragma kernel CSMain
+
+// Output texture
+RWTexture2D<float2> Result;
+
+// Parameters
+float _Time;
+float4 _BaseFlow;       // xy = direction * strength
+float _Turbulence;
+float _NoiseScale;
+float _NoiseSpeed;
+float2 _FieldMin;
+float2 _FieldMax;
+int _Resolution;
+
+// Affector data (max 16 affectors)
+int _AffectorCount;
+float4 _AffectorPositions[16];  // xyz = position, w = type (0=vortex, 1=jet, 2=sink, 3=source, 4=turbulence)
+float4 _AffectorParams[16];     // x = strength, y = rotationSpeed, z = falloff, w = radius (overloaded from positions.z)
+
+// Simplex noise functions for smooth, organic flow
+// Based on Ashima Arts noise functions
+
+float3 mod289(float3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+float4 mod289(float4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+float4 permute(float4 x) { return mod289(((x * 34.0) + 1.0) * x); }
+float4 taylorInvSqrt(float4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+
+float snoise(float3 v)
+{
+    const float2 C = float2(1.0 / 6.0, 1.0 / 3.0);
+    const float4 D = float4(0.0, 0.5, 1.0, 2.0);
+
+    // First corner
+    float3 i = floor(v + dot(v, C.yyy));
+    float3 x0 = v - i + dot(i, C.xxx);
+
+    // Other corners
+    float3 g = step(x0.yzx, x0.xyz);
+    float3 l = 1.0 - g;
+    float3 i1 = min(g.xyz, l.zxy);
+    float3 i2 = max(g.xyz, l.zxy);
+
+    float3 x1 = x0 - i1 + C.xxx;
+    float3 x2 = x0 - i2 + C.yyy;
+    float3 x3 = x0 - D.yyy;
+
+    // Permutations
+    i = mod289(i);
+    float4 p = permute(permute(permute(
+        i.z + float4(0.0, i1.z, i2.z, 1.0))
+        + i.y + float4(0.0, i1.y, i2.y, 1.0))
+        + i.x + float4(0.0, i1.x, i2.x, 1.0));
+
+    // Gradients
+    float n_ = 0.142857142857;
+    float3 ns = n_ * D.wyz - D.xzx;
+
+    float4 j = p - 49.0 * floor(p * ns.z * ns.z);
+
+    float4 x_ = floor(j * ns.z);
+    float4 y_ = floor(j - 7.0 * x_);
+
+    float4 x = x_ * ns.x + ns.yyyy;
+    float4 y = y_ * ns.x + ns.yyyy;
+    float4 h = 1.0 - abs(x) - abs(y);
+
+    float4 b0 = float4(x.xy, y.xy);
+    float4 b1 = float4(x.zw, y.zw);
+
+    float4 s0 = floor(b0) * 2.0 + 1.0;
+    float4 s1 = floor(b1) * 2.0 + 1.0;
+    float4 sh = -step(h, 0.0);
+
+    float4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+    float4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+
+    float3 p0 = float3(a0.xy, h.x);
+    float3 p1 = float3(a0.zw, h.y);
+    float3 p2 = float3(a1.xy, h.z);
+    float3 p3 = float3(a1.zw, h.w);
+
+    // Normalize gradients
+    float4 norm = taylorInvSqrt(float4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+    p0 *= norm.x;
+    p1 *= norm.y;
+    p2 *= norm.z;
+    p3 *= norm.w;
+
+    // Mix final noise value
+    float4 m = max(0.6 - float4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
+    m = m * m;
+    return 42.0 * dot(m * m, float4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
+}
+
+// Curl noise for divergence-free flow (looks more natural)
+float2 curlNoise(float2 pos, float time)
+{
+    float eps = 0.01;
+
+    // Sample noise at offset positions
+    float n1 = snoise(float3(pos.x, pos.y + eps, time));
+    float n2 = snoise(float3(pos.x, pos.y - eps, time));
+    float n3 = snoise(float3(pos.x + eps, pos.y, time));
+    float n4 = snoise(float3(pos.x - eps, pos.y, time));
+
+    // Curl = (dN/dy, -dN/dx)
+    float dx = (n3 - n4) / (2.0 * eps);
+    float dy = (n1 - n2) / (2.0 * eps);
+
+    return float2(dy, -dx);
+}
+
+// Calculate affector contribution
+float2 GetAffectorFlow(float2 worldPos, int affectorIndex)
+{
+    float4 posData = _AffectorPositions[affectorIndex];
+    float4 params = _AffectorParams[affectorIndex];
+
+    float2 affectorPos = posData.xy;
+    float radius = posData.z;
+    int type = (int)posData.w;
+
+    float strength = params.x;
+    float rotationSpeed = params.y;
+    float falloff = params.z;
+
+    float2 toPoint = worldPos - affectorPos;
+    float distance = length(toPoint);
+
+    // Outside radius - no contribution
+    if (distance > radius || distance < 0.001)
+        return float2(0, 0);
+
+    // Calculate falloff
+    float normalizedDist = distance / radius;
+    float falloffMult = pow(1.0 - normalizedDist, falloff);
+
+    float2 flow = float2(0, 0);
+
+    // Type: 0=Vortex, 1=Jet, 2=Sink, 3=Source, 4=Turbulence
+    if (type == 0) // Vortex
+    {
+        float2 tangent = normalize(float2(-toPoint.y, toPoint.x));
+        flow = tangent * rotationSpeed * falloffMult * strength;
+    }
+    else if (type == 1) // Jet - use rotationSpeed as jet direction angle
+    {
+        float angle = rotationSpeed;
+        float2 dir = float2(cos(angle), sin(angle));
+        flow = dir * strength * falloffMult;
+    }
+    else if (type == 2) // Sink
+    {
+        flow = -normalize(toPoint) * strength * falloffMult;
+    }
+    else if (type == 3) // Source
+    {
+        flow = normalize(toPoint) * strength * falloffMult;
+    }
+    else if (type == 4) // Turbulence
+    {
+        float2 turb = curlNoise(worldPos * 0.5, _Time);
+        flow = turb * strength * falloffMult;
+    }
+
+    return flow;
+}
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    // Check bounds
+    if (id.x >= (uint)_Resolution || id.y >= (uint)_Resolution)
+        return;
+
+    // Calculate UV and world position
+    float2 uv = float2(id.x, id.y) / float(_Resolution - 1);
+    float2 worldPos = lerp(_FieldMin, _FieldMax, uv);
+
+    // Start with base flow
+    float2 flow = _BaseFlow.xy;
+
+    // Add turbulence via curl noise (divergence-free for natural look)
+    if (_Turbulence > 0)
+    {
+        float2 noisePos = worldPos / _NoiseScale;
+        float time = _Time * _NoiseSpeed;
+
+        // Multi-octave curl noise for richer detail
+        float2 turbulence = float2(0, 0);
+        turbulence += curlNoise(noisePos, time) * 1.0;
+        turbulence += curlNoise(noisePos * 2.0, time * 1.3) * 0.5;
+        turbulence += curlNoise(noisePos * 4.0, time * 1.7) * 0.25;
+        turbulence /= 1.75; // Normalize
+
+        flow += turbulence * _Turbulence * length(_BaseFlow.xy);
+    }
+
+    // Apply affector contributions
+    for (int i = 0; i < _AffectorCount; i++)
+    {
+        flow += GetAffectorFlow(worldPos, i);
+    }
+
+    // Write result
+    Result[id.xy] = flow;
+}

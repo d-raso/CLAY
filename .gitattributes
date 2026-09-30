@@ -1,0 +1,37 @@
+# Normalise line endings for text; keep Unity's serialized files as text (Force Text serialization)
+* text=auto
+
+*.cs      text diff=csharp
+*.shader  text
+*.hlsl    text
+*.cginc   text
+*.compute text
+*.md      text
+*.json    text
+
+# Unity YAML assets: merge with Unity's Smart Merge (UnityYAMLMerge) if configured
+*.unity     merge=unityyamlmerge eol=lf
+*.prefab    merge=unityyamlmerge eol=lf
+*.asset     merge=unityyamlmerge eol=lf
+*.mat       merge=unityyamlmerge eol=lf
+*.anim      merge=unityyamlmerge eol=lf
+*.controller merge=unityyamlmerge eol=lf
+*.meta      eol=lf
+
+# Binaries: never diff or merge as text
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.webp  binary
+*.tga   binary
+*.psd   binary
+*.exr   binary
+*.hdr   binary
+*.fbx   binary
+*.obj   binary
+*.wav   binary
+*.mp3   binary
+*.ogg   binary
+*.ttf   binary
+*.otf   binary
+*.dll   binary

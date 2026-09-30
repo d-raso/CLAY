@@ -1,0 +1,55 @@
+# ── Unity: regenerated on every machine ──
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+
+# Unity-generated project/IDE files
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+.vs/
+.vscode/
+.idea/
+.consulo/
+ExportedObj/
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+sysinfo.txt
+crashlytics-buildtime.map
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# ── CLAY: local diagnostics & scratch ──
+/SurfaceShots/
+/GeneratedAssets/
+/_scratch/
+/_SkyboxCaptures/
+/nul
+
+# personal Claude Code settings (permissions etc. — per machine)
+/.claude/settings.local.json
+
+# OS clutter
+.DS_Store
+Thumbs.db
+desktop.ini
