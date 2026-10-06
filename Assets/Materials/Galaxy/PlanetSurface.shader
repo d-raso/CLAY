@@ -27,6 +27,7 @@ Shader "CLAY/PlanetSurface"
         _SeaLevel("Sea Level", Float) = 0.5
         _OceanSpecPower("Ocean Spec Power", Float) = 200
         _OceanSpecGain("Ocean Spec Gain", Float) = 0.7
+        _NightGlow("Night glow of liquid (rgb, a = strength)", Color) = (0, 0, 0, 0)
     }
     SubShader
     {
@@ -52,6 +53,7 @@ Shader "CLAY/PlanetSurface"
             half4 _Sun1Col, _Sun2Col;
             float _Ambient, _RimPower, _Emission, _UseTex, _BumpScale, _CamFill, _TexelU, _TexelV;
             float _HasOcean, _SeaLevel, _OceanSpecPower, _OceanSpecGain;
+            half4 _NightGlow;
             float4 _CamPosObj;   // camera position in this object's local space (supplied by the CPU)
 
             v2f vert(appdata v)
@@ -124,6 +126,9 @@ Shader "CLAY/PlanetSurface"
                     col += half3(1.0, 0.97, 0.9) * glint;
                     col += albedo * fres * 0.35 * ndl;
                 }
+
+                // molten seas glow through the night (lava / glass-rain / magma-ocean worlds)
+                if (_NightGlow.a > 0.001) col += _NightGlow.rgb * isWater * _NightGlow.a * (1.0 - saturate(ndl * 2.5)) * 0.9;
 
                 // Sunlit limb glow (object-space fresnel), only on the day side.
                 float rim = pow(1.0 - saturate(dot(nObj, V)), _RimPower);

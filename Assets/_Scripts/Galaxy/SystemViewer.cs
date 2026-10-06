@@ -335,6 +335,11 @@ namespace CLAY.Galaxy
                     b.mat.SetFloat("_OceanSpecGain", knobOceanGain);
                 }
                 else b.mat.SetFloat("_HasOcean", 0f);
+                // molten seas glow on the night side
+                var mcat = PlanetCategories.Classify(pl, PlanetTexture.Chem(pl, pseed).theme, pseed).cat;
+                bool molten = mcat == PlanetCategory.LavaOcean || mcat == PlanetCategory.GlassRain || mcat == PlanetCategory.SilicateVapor
+                           || mcat == PlanetCategory.PostGiantImpact || mcat == PlanetCategory.CarbonLava;
+                b.mat.SetColor("_NightGlow", molten ? new Color(1f, 0.32f, 0.06f, 1.4f) : Color.clear);
             }
 
             // Atmosphere haze shell — rocky worlds only (a giant's own shader already looks gaseous).
@@ -346,6 +351,18 @@ namespace CLAY.Galaxy
                 b.atmoMat.SetFloat("_OuterR", 0.5f);
                 ApplyAtmoKnobs(b.atmoMat, giant);
                 b.atmoMat.SetFloat("_Intensity", knobAtmoIntensity * PlanetTexture.AtmosphereDensity(pl));   // by composition
+                // AURORAE: a magnetised world with air under its star's wind lights rings around its magnetic poles on
+                // the night side — coloured by the gas that glows (O₂ green, N₂ violet-red, H₂ pink)
+                {
+                    float mag = PlanetPhysics.Magnetic(pl);
+                    float drive = Mathf.Clamp01(pl.starFlareActivity * 1.5f + 0.25f);
+                    var gas = PlanetPhysics.Composition(pl);
+                    Color ac = new Color(0.3f, 1f, 0.5f) * gas.o2 * 3f + new Color(0.7f, 0.3f, 0.95f) * gas.n2 + new Color(1f, 0.45f, 0.75f) * gas.h2
+                             + new Color(0.6f, 0.75f, 1f) * (gas.co2 + gas.he);
+                    float mx = Mathf.Max(ac.r, Mathf.Max(ac.g, ac.b), 0.01f); ac /= mx; ac.a = 1f;
+                    b.atmoMat.SetColor("_AuroraColor", ac);
+                    b.atmoMat.SetFloat("_Aurora", Mathf.Clamp01(mag * drive * 1.4f - 0.15f));
+                }
                 b.atmoTf = MakeShell(b, b.atmoMat, AtmoShellScale);
 
                 // Dynamic cloud deck — sits just above the surface, drifts slowly, lit by the star. Coverage
@@ -381,6 +398,12 @@ namespace CLAY.Galaxy
                         cloudC = new Color(0.84f, 0.74f, 0.60f); cover *= 0.65f; swirl = crng.Range(0.05f, 0.2f); break;
                 }
                 if (tc > 200f) { haze = Mathf.Max(haze, 0.5f); cover = Mathf.Max(cover, 0.9f); }   // runaway greenhouse → opaque
+                // shrouded categories are a solid deck from space (Venus, steam, smog, tholin, Hycean haze)
+                var catNow = PlanetCategories.Classify(pl, cchem.theme, pseed).cat;
+                if (catNow == PlanetCategory.VenusGreenhouse || catNow == PlanetCategory.SulfuricCloud || catNow == PlanetCategory.WaterVapor
+                    || catNow == PlanetCategory.PhotochemicalSmog || catNow == PlanetCategory.Tholin || catNow == PlanetCategory.Hycean)
+                { cover = 1f; haze = Mathf.Max(haze, 0.7f); sharp = 0.3f; }
+                if (catNow == PlanetCategory.StormOcean) { cover = Mathf.Max(cover, 0.7f); swirl = 0.6f; speed *= 2.5f; }
                 // Slightly desaturate the cloud tint for realism.
                 float cg = cloudC.r * 0.299f + cloudC.g * 0.587f + cloudC.b * 0.114f;
                 cloudC = Color.Lerp(new Color(cg, cg, cg), cloudC, 0.8f);
@@ -1416,6 +1439,16 @@ namespace CLAY.Galaxy
 
         string _story;                            // formation/conditions story for the focused planet
 
+        /// Screen rect (GUI coords) of another screen's panel drawn over the system view (e.g. the planet editor), so
+        /// clicks on it don't pick bodies behind it.
+        public static Rect ExtraUiRect;
+
+        /// Fly to the first planet of the loaded system (the planet editor's single world).
+        public void FocusFirstPlanet()
+        {
+            foreach (var b in bodies) if (b.planet != null && b.host == null) { FocusOn(b); return; }
+        }
+
         void FocusOn(Body b)
         {
             focus = b;
@@ -1472,6 +1505,8 @@ namespace CLAY.Galaxy
                 else
                     Debug.LogWarning($"Planet bake failed: {b.bakeTask.Exception?.GetBaseException().Message}");
                 b.bakeTask = null;
+                // a focus that arrived while the first low-res bake was running couldn't queue the sharp one — do it now
+                if (b == focus && b.planet != null && !IsGiant(b.planet) && !b.hiRes) BakePlanetTexAsync(b, SurfaceTexHi);
             }
         }
 
@@ -1501,7 +1536,7 @@ namespace CLAY.Galaxy
         {
             if (hideGui) return false;   // panels aren't drawn, so they shouldn't eat clicks
             Vector2 g = new Vector2(m.x, Screen.height - m.y);
-            return panel.Contains(g) || (showTune && tunePanel.Contains(g));
+            return panel.Contains(g) || (showTune && tunePanel.Contains(g)) || ExtraUiRect.Contains(g);
         }
 
         void OnGUI()

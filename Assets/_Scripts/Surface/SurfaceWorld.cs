@@ -295,6 +295,86 @@ namespace CLAY.Surface
         }
 
         // ── per frame ─────────────────────────────────────────────────────────────────────────────────────
+        // ── TIDE POOLS: hover shallow water at a shore → the cursor becomes a play icon; click to enter the cell stage ──
+        bool poolValid; Vector2 poolScreen; double poolX, poolZ; float poolProbeTimer; SurfaceGeo.Sample poolSample;
+        Texture2D playIcon;
+
+        void ProbeTidePool()
+        {
+            poolProbeTimer -= Time.unscaledDeltaTime;
+            if (poolProbeTimer > 0f) return;
+            poolProbeTimer = 0.12f;
+            poolValid = false;
+            var solvent = PlanetPhysics.Liquid(planet, PlanetClimate.Derive(planet).pressureBar);
+            if (solvent == LiquidType.None && !geo.hasSea) return;
+            Vector2 sp = cursorFree ? (Vector2)Input.mousePosition : new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+            var ray = cam.ScreenPointToRay(sp);
+            float t = 0.5f;
+            while (t < 160f)
+            {
+                Vector3 q = ray.origin + ray.direction * t;
+                double wx = q.x + ox, wz = q.z + oz;
+                var sm = geo.At(wx, wz);
+                bool sea = geo.hasSea && sm.heightM < 0f;
+                float top = sea ? 0f : sm.heightM;
+                if (q.y <= top)
+                {
+                    bool liquid = sea || sm.water > 0.5f;
+                    float depth = sea ? -sm.heightM : liquid ? 1f : 0f;
+                    // a shore within ~15 m (water next to land, or low rock next to water)
+                    bool nearOther = false;
+                    for (int k = 0; k < 6 && !nearOther; k++)
+                    {
+                        float a = k * Mathf.PI / 3f;
+                        var n = geo.At(wx + Mathf.Cos(a) * 14.0, wz + Mathf.Sin(a) * 14.0);
+                        bool nl = (geo.hasSea && n.heightM < 0f) || n.water > 0.5f;
+                        nearOther = liquid ? !nl : nl;
+                    }
+                    var lc = geo.ClimateAt(sm);
+                    bool frozen = solvent == LiquidType.Water && lc.tMaxC < -2f;
+                    poolValid = !frozen && nearOther && (liquid ? depth < 3f : sm.heightM < 1.5f);
+                    if (poolValid) { poolScreen = sp; poolX = wx; poolZ = wz; poolSample = sm; }
+                    return;
+                }
+                t += Mathf.Max(0.75f, t * 0.03f);
+            }
+        }
+
+        void EnterTidePool()
+        {
+            var lc = geo.ClimateAt(poolSample);
+            var ctx = CLAY.CellStage.CellStageContext.FromPlanet(planet, pSeed, lc, poolX, poolZ);
+            Debug.Log($"[Surface] entering the cell stage at ({poolX:0},{poolZ:0}) — {ctx.solvent}, {ctx.tempC:0} °C");
+            poolValid = false;
+            CLAY.CellStage.CellStageWorld.Enter(ctx);
+        }
+
+        void DrawPlayCursor()
+        {
+            if (!poolValid) { if (cursorFree) Cursor.visible = true; return; }
+            if (playIcon == null)
+            {
+                const int S = 48;
+                playIcon = new Texture2D(S, S, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
+                for (int y = 0; y < S; y++)
+                    for (int x = 0; x < S; x++)
+                    {
+                        float u = (x + 0.5f) / S * 2f - 1f, v = (y + 0.5f) / S * 2f - 1f;
+                        float ring = Mathf.Abs(Mathf.Sqrt(u * u + v * v) - 0.86f);
+                        bool tri = u > -0.35f && u < 0.6f && Mathf.Abs(v) < (0.6f - u) * 0.62f;
+                        float a = Mathf.Max(tri ? 1f : 0f, Mathf.Clamp01(1f - ring * 14f));
+                        playIcon.SetPixel(x, y, new Color(1f, 1f, 1f, a));
+                    }
+                playIcon.Apply();
+            }
+            if (cursorFree) Cursor.visible = false;
+            float pulse = 1f + 0.08f * Mathf.Sin(Time.unscaledTime * 5f);
+            float sz = 34f * pulse;
+            var prev = GUI.color; GUI.color = new Color(0.75f, 1f, 0.9f, 0.95f);
+            GUI.DrawTexture(new Rect(poolScreen.x - sz * 0.5f, Screen.height - poolScreen.y - sz * 0.5f, sz, sz), playIcon);
+            GUI.color = prev;
+        }
+
         void Update()
         {
             if (Input.GetKeyDown(KeyCode.Escape)) { Close(); return; }
@@ -306,6 +386,8 @@ namespace CLAY.Surface
             if (Input.GetKeyDown(KeyCode.K)) ToggleMarker();
             if (Input.GetKeyDown(KeyCode.J)) showDiag = !showDiag;
             if (Input.GetKeyDown(KeyCode.M)) ToggleMenu();
+            try { ProbeTidePool(); } catch (System.Exception ex) { Debug.LogException(ex); poolValid = false; }
+            if (poolValid && Input.GetMouseButtonDown(0)) { EnterTidePool(); return; }
             if (Input.GetKeyDown(KeyCode.U)) { SurfaceEcology.DebugPlainMaterial = !SurfaceEcology.DebugPlainMaterial; Debug.Log($"[Surface] plain plant material {(SurfaceEcology.DebugPlainMaterial ? "ON" : "OFF")}"); }
             // Screenshots for remote diagnosis: one automatically 5 s after landing, and F12 any time.
             shotTimer += Time.unscaledDeltaTime;
@@ -367,6 +449,7 @@ namespace CLAY.Surface
                 try { rocks.Update(wx, wz, tBusy); } catch (System.Exception ex) { Fail("rocks update", ex); }
                 if (alt < 2000f) try { rocks.Render(cam, ox, oz); } catch (System.Exception ex) { Fail("rocks render", ex); }
             }
+            if (weather != null) weather.SetGround(ground);
             if (weather != null) try { weather.Update(Time.unscaledDeltaTime, cam.transform.position, hereClimate, sunElevDeg); } catch (System.Exception ex) { Fail("weather", ex); }
             if (grass != null && grass.enabled)
             {
@@ -489,6 +572,8 @@ namespace CLAY.Surface
             // NEVER disable the sun: URP would promote another scene directional light (the system view's star) to
             // main light and floodlight the region at nightfall. Keep it on at zero intensity instead.
             sun.enabled = true;
+            // bioluminescent worlds: the vegetation lights up after dusk
+            Shader.SetGlobalFloat("_BioGlow", geo.category == PlanetCategory.Bioluminescent ? Mathf.Clamp01(-elev * 6f + 0.1f) * 0.8f : 0f);
             SSAO.SetIntensity(ssao, Mathf.Lerp(1.6f, 0.9f, Mathf.Clamp01(elev * 1.6f)));
 
             // SECOND SUN: same spin as the first; brightness relative to the main star (true flux ratio, compressed)
@@ -634,6 +719,17 @@ namespace CLAY.Surface
                 sh.AddDirectionalLight(new Vector3(-sun.transform.forward.x, 0.15f, -sun.transform.forward.z).normalized, bounce * 0.6f, 1f);
             }
             RenderSettings.ambientProbe = sh;
+            // the same SH as shader globals (Unity's unity_SHA/B/C packing) — instanced draws read stale per-draw SH
+            {
+                const float k0 = 0.2820948f, k1 = 0.4886025f, k2 = 1.0925484f, k3 = 0.3153916f, k4 = 0.5462742f;   // SH basis constants
+                for (int c = 0; c < 3; c++)
+                {
+                    string ch = c == 0 ? "r" : c == 1 ? "g" : "b";
+                    Shader.SetGlobalVector("_SSHA" + ch, new Vector4(sh[c, 3] * k1, sh[c, 1] * k1, sh[c, 2] * k1, sh[c, 0] * k0 - sh[c, 6] * k3));
+                    Shader.SetGlobalVector("_SSHB" + ch, new Vector4(sh[c, 4] * k2, sh[c, 5] * k2, sh[c, 6] * k3 * 3f, sh[c, 7] * k2));
+                }
+                Shader.SetGlobalVector("_SSHC", new Vector4(sh[0, 8] * k4, sh[1, 8] * k4, sh[2, 8] * k4, 1f));
+            }
             if (waterMat) { waterMat.SetColor("_SkyZenith", zenith); waterMat.SetColor("_SkyHorizon", horizon); }
         }
 
@@ -893,9 +989,13 @@ namespace CLAY.Surface
         void SetupLiquid(PlanetTexture.ChemPalette pal)
         {
             var theme = pal.theme;
-            bool methane = theme == PlanetTexture.ChemTheme.Methanic || theme == PlanetTexture.ChemTheme.Tholin;
+            var lq = PlanetPhysics.Liquid(planet, geo.climate.pressureBar);
+            bool methane = lq == LiquidType.Methane || (planet.liquidOverride < 0 && (theme == PlanetTexture.ChemTheme.Methanic || theme == PlanetTexture.ChemTheme.Tholin));
             Vector3 absorb; float amp = 1f, visc = 1f;
             if (methane) { absorb = new Vector3(0.05f, 0.12f, 0.4f); amp = 0.35f; visc = 0.6f; }                 // low-viscosity but low wind stress
+            else if (lq == LiquidType.Ammonia) { absorb = new Vector3(0.07f, 0.08f, 0.16f); amp = 0.6f; visc = 0.7f; }   // pale, milky
+            else if (lq == LiquidType.Brine) { absorb = new Vector3(0.35f, 0.1f, 0.08f); amp = 0.75f; visc = 1.4f; }       // dense, sluggish
+            else if (lq == LiquidType.Supercritical) { absorb = new Vector3(0.03f, 0.03f, 0.035f); amp = 0.15f; visc = 0.4f; }  // a glassy, hazy sea
             else switch (planet.waterChemistry)
             {
                 case WaterChemistry.Iron:      absorb = new Vector3(0.12f, 0.35f, 0.6f); amp = 0.8f; visc = 1.3f; break;
@@ -1004,6 +1104,7 @@ namespace CLAY.Surface
 
         void OnGUI()
         {
+            DrawPlayCursor();
             if (hud == null)
             {
                 hud = new GUIStyle(GUI.skin.label) { fontSize = 12, richText = true, wordWrap = true };

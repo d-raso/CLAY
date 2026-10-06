@@ -34,7 +34,10 @@ float CloudCoverage2D(float2 xz)
     float2 u = (xz + _CloudOffset.xy) / max(_CloudOffset.z, 1.0);
     float n = cl_fbm(u);
     float c = _CloudShape.x;
-    return saturate((n - (1.0 - c) * 0.9) / max(0.18 + c * 0.25, 0.05));
+    // the threshold slides with coverage but the ramp stays narrow, so even an overcast sky keeps shapes, thick
+    // and thin parts and the odd break — instead of one uniform grey sheet
+    float thresh = lerp(0.72, 0.3, c);
+    return saturate((n - thresh) / 0.22) * saturate(0.55 + n);
 }
 
 // 3D density inside the slab: coverage × vertical profile (flat bases, rounded tops), eroded by detail noise.

@@ -199,8 +199,8 @@ namespace CLAY.Flora
             g.barkType = (BarkType)r.RangeInt(0, 7);
             g.barkScale = r.Range(0.6f, 1.8f);
             g.barkRelief = r.Range(0.6f, 1.4f);
-            g.barkWarp = r.Range(0.15f, 0.7f);
-            g.barkNoise = r.Range(0.05f, 0.4f);
+            g.barkWarp = r.Range(0.12f, 0.55f);
+            g.barkNoise = r.Range(0.03f, 0.25f);
             g.lean = g.archetype == PlantArchetype.Vine || g.archetype == PlantArchetype.MatAlgae ? r.Range(0.6f, 1f) : r.Range(0f, 0.25f);
             // Bare bole (palm/umbrella): sometimes clear the lower trunk so the crown sits on a naked stem.
             g.bareTrunkFrac = (g.archetype == PlantArchetype.Tree && r.Value < 0.3f) ? r.Range(0.5f, 0.85f) : 0f;

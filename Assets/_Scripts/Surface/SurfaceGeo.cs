@@ -33,6 +33,38 @@ namespace CLAY.Surface
 
         // landform strengths (0..1), derived from the planet
         public readonly float mountains, valleys, mesas, dunes, craters, hills;
+        public readonly PlanetCategory category;
+
+        // ── GEOLOGICAL PROVINCES: ~140 km regions, each with its own landform mix, picked by the world's history ──
+        public enum Province { Lowland, FoldBelt, Upland, Rift, VolcanicField, FloodBasalt, Badlands, Glaciated, Karst, DuneSea, ImpactBasin }
+        const int ProvCount = 11;
+        // per province: hills×, mountains×, then FLOORS for mountains, valleys, mesas, dunes, plateaus, chasms,
+        // volcanoes, glaciation, craters
+        static readonly float[,] ProvTab =
+        {
+            //  hl     mt    mtF   vaF   meF   duF   plF   chF   voF   glF   crF
+            { 0.45f, 0.2f,  0f,   0.5f, 0f,   0f,   0f,   0f,   0f,   0f,   0f   },  // Lowland: broad plains, meandering rivers
+            { 1.3f,  1f,    0.85f,0.3f, 0f,   0f,   0f,   0f,   0f,   0f,   0f   },  // FoldBelt: young ranges
+            { 1.9f,  0.5f,  0f,   0.55f,0f,   0f,   0f,   0f,   0f,   0f,   0f   },  // Upland: worn-down old mountains, deep valleys
+            { 0.7f,  0.6f,  0.3f, 0.3f, 0f,   0f,   0.3f, 0.75f,0.3f, 0f,   0f   },  // Rift: graben, escarpments, a few cones
+            { 0.8f,  0.6f,  0f,   0.2f, 0f,   0f,   0f,   0f,   0.85f,0f,   0f   },  // VolcanicField
+            { 0.35f, 0.15f, 0f,   0.3f, 0.5f, 0f,   0.9f, 0.2f, 0f,   0f,   0f   },  // FloodBasalt: stepped traps, plateaus
+            { 0.8f,  0.3f,  0f,   0.75f,0.85f,0f,   0.2f, 0f,   0f,   0f,   0f   },  // Badlands: terraces, gullies
+            { 1.2f,  1f,    0.4f, 0.55f,0f,   0f,   0f,   0f,   0f,   0.85f,0f   },  // Glaciated: U-valleys, cirques
+            { 1.7f,  0.4f,  0f,   0.6f, 0f,   0f,   0f,   0f,   0f,   0f,   0f   },  // Karst: tower hills, sinks
+            { 0.25f, 0.1f,  0f,   0f,   0f,   0.95f,0f,   0f,   0f,   0f,   0f   },  // DuneSea: erg
+            { 0.6f,  0.5f,  0f,   0.2f, 0f,   0f,   0f,   0f,   0f,   0f,   0.7f },  // ImpactBasin: old eroded craters
+        };
+        readonly float[] provCum = new float[ProvCount];
+        public Province ProvinceAt(double x, double z) { ProvinceMix((float)x, (float)z, out var pv, out _); return pv; }
+        void ProvinceMix(float fx, float fz, out Province pv, out float w)
+        {
+            float wx = (N(fx, fz, 45000f, 401f) - 0.5f) * 50000f, wz = (N(fx, fz, 45000f, 403f) - 0.5f) * 50000f;
+            PlanetTexture.SurfaceSampler.WorleyNoise(new Vector3((fx + wx) / 140000f + 41f, 7.7f, (fz + wz) / 140000f - 13f), out float f1, out float f2, out float cr);
+            int i = 0; while (i < ProvCount - 1 && cr > provCum[i]) i++;
+            pv = (Province)i;
+            w = SS(0f, 0.14f, f2 - f1);   // provinces blend across their borders
+        }          // the documented category this world is (PlanetCategories)
         public readonly float plateaus, chasms, volcanoes, glaciation;   // big landforms (0..1)
         public readonly bool volatiles;                                  // something to freeze / flow (water, methane…)
         public SurfaceHydrology hydro;                                   // rivers & lakes (set after the background build)
@@ -73,6 +105,52 @@ namespace CLAY.Surface
             chasms = Mathf.Clamp01((stagnant ? 0.45f : 0.1f) + dry * 0.3f + s.Volcanism * 0.2f - 0.2f);            // rifts, Valles-Marineris trenches
             volcanoes = Mathf.Clamp01(s.Volcanism * 1.2f - 0.25f + (tect == PlanetTexture.TectonicMode.HeatPipe ? 0.3f : 0f));
             glaciation = volatiles ? Mathf.Clamp01((-(p.meanTempC - 12f)) / 40f) : 0f;
+
+            // ── the CATEGORY's signature landforms (on top of the physics above) ──
+            category = PlanetCategories.Classify(p, pal.theme, planetSeed).cat;
+            switch (category)
+            {
+                case PlanetCategory.CrateredDead: case PlanetCategory.RegolithDust: case PlanetCategory.EjectaDusted:
+                    craters = Mathf.Max(craters, 0.9f); break;
+                case PlanetCategory.Canyon:
+                    chasms = Mathf.Max(chasms, 0.85f); valleys = Mathf.Max(valleys, 0.5f); break;
+                case PlanetCategory.Mesa:
+                    mesas = Mathf.Max(mesas, 0.9f); plateaus = Mathf.Max(plateaus, 0.8f); break;
+                case PlanetCategory.VolcanicHighland: case PlanetCategory.HellMoon:
+                    volcanoes = Mathf.Max(volcanoes, 0.85f); mountains = Mathf.Max(mountains, 0.7f); break;
+                case PlanetCategory.BasaltPlains: case PlanetCategory.Obsidian:
+                    volcanoes = Mathf.Max(volcanoes, 0.45f); mountains *= 0.5f; break;
+                case PlanetCategory.Glacier: case PlanetCategory.IceCappedOcean:
+                    glaciation = Mathf.Max(glaciation, 0.9f); mountains = Mathf.Max(mountains, 0.55f); break;
+                case PlanetCategory.Desert: case PlanetCategory.OchreIron:
+                    dunes = Mathf.Max(dunes, air ? 0.75f : 0f); break;
+                case PlanetCategory.Karst:
+                    valleys = Mathf.Max(valleys, 0.6f); hills = Mathf.Max(hills, 1f); break;
+                case PlanetCategory.Pangaea: case PlanetCategory.Continental:
+                    mountains = Mathf.Max(mountains, 0.6f); break;
+                case PlanetCategory.SuperEarth: case PlanetCategory.MegaEarth:
+                    mountains *= 0.6f; break;
+            }
+            // province weights from the world's HISTORY (past volcanism, plate style, climate, water, impacts)
+            {
+                bool mobile = tect == PlanetTexture.TectonicMode.MobileLid;
+                float past = Mathf.Clamp01(s.Volcanism + (stagnant ? 0.25f : 0f) + (mobile ? 0.25f : 0f));
+                float cold = Mathf.Clamp01((22f - p.meanTempC) / 40f);
+                var pw = new float[ProvCount];
+                pw[(int)Province.Lowland] = 0.7f + wet * 0.6f;
+                pw[(int)Province.FoldBelt] = mobile ? 1.0f : 0.25f * past;
+                pw[(int)Province.Upland] = 0.6f + (mobile ? 0.3f : 0f);
+                pw[(int)Province.Rift] = past * 0.5f + (mobile ? 0.2f : 0f);
+                pw[(int)Province.VolcanicField] = s.Volcanism * 1.2f + (tect == PlanetTexture.TectonicMode.HeatPipe ? 0.8f : 0f);
+                pw[(int)Province.FloodBasalt] = past * 0.6f + (stagnant ? 0.35f : 0f);
+                pw[(int)Province.Badlands] = air ? dry * 0.7f + s.Mineral * 0.25f : 0f;
+                pw[(int)Province.Glaciated] = volatiles ? cold * 0.9f : 0f;
+                pw[(int)Province.Karst] = s.WaterCov > 0.05f ? wet * 0.35f + pal.vegAmt * 0.3f : 0f;
+                pw[(int)Province.DuneSea] = air ? dry * dry * 0.9f : 0f;
+                pw[(int)Province.ImpactBasin] = 0.05f + p.bombardment * 0.5f + (air ? 0f : 0.4f);
+                float tot = 0f; for (int k = 0; k < ProvCount; k++) tot += pw[k];
+                float acc = 0f; for (int k = 0; k < ProvCount; k++) { acc += pw[k] / Mathf.Max(tot, 1e-5f); provCum[k] = acc; }
+            }
             var r = new DetRng(DetRng.Hash(planetSeed, 0xD0E5UL));
             duneAngle = r.Range(0f, Mathf.PI);          // prevailing wind direction
             duneLen = r.Range(160f, 420f);               // dune spacing
@@ -109,6 +187,7 @@ namespace CLAY.Surface
             public float fx, fz;                                    // local position (for regional materials)
             public float volcano, glacier, chasm, plateau;          // big-landform masks
             public float water, flowX, flowZ;                       // river / lake surface (1 = liquid here) and flow direction
+            public int province; public float provW;                // geological province + how fully inside it
         }
 
         public Sample At(double x, double z)
@@ -120,6 +199,23 @@ namespace CLAY.Surface
             float baseM = above * heightScale;
             float fx = (float)x, fz = (float)z;   // fine for noise out to ±500 km at these scales
 
+            // the local GEOLOGICAL PROVINCE reshapes the planet-wide landform mix (locals shadow the fields)
+            ProvinceMix(fx, fz, out var prov, out float pw);
+            int pi = (int)prov;
+            float PF(float v, int col) => Mathf.Lerp(v, Mathf.Max(v, ProvTab[pi, col]), pw);
+            float hills = Mathf.Lerp(this.hills, this.hills * ProvTab[pi, 0], pw);
+            float mountains = PF(Mathf.Lerp(this.mountains, this.mountains * ProvTab[pi, 1], pw), 2);
+            float valleys = s.HasAtmo ? PF(this.valleys, 3) : 0f;
+            float mesas = PF(this.mesas, 4);
+            float dunes = this.dunes > 0f ? PF(this.dunes, 5) : 0f;
+            float plateaus = PF(this.plateaus, 6);
+            float chasms = PF(this.chasms, 7);
+            float volcanoes = PF(this.volcanoes, 8);
+            float glaciation = volatiles ? PF(this.glaciation, 9) : 0f;
+            float craters = PF(this.craters, 10);
+            if (prov != Province.DuneSea) dunes *= Mathf.Lerp(1f, 0.5f, pw);
+            o.province = pi; o.provW = pw;
+
             float valleyCut = 0f;
             // domain warp so every landform bends organically instead of lining up with the noise lattice
             float wx = (N(fx, fz, 6000f, 3f) - 0.5f) * 3000f, wz = (N(fx, fz, 6000f, 9f) - 0.5f) * 3000f;
@@ -130,7 +226,8 @@ namespace CLAY.Surface
                     + (N(qx, qz, 1100f, 5f) - 0.5f) * 2f * 60f * hills;
 
             // mountain ranges in regional belts: sharp ridged peaks where the belt mask is high
-            float belt = SS(0.52f, 0.78f, N(fx, fz, 26000f, 17f) + Mathf.Clamp01(above * 3f) * 0.25f);
+            float belt = SS(0.52f, 0.78f, N(fx, fz, 26000f, 17f) + Mathf.Clamp01(above * 3f) * 0.25f
+                          + (prov == Province.FoldBelt || prov == Province.Glaciated ? 0.3f * pw : 0f));
             float ridge = Ridged(qx, qz, 4200f, 7f);
             float mtn = belt * mountains;
             h += ridge * ridge * (400f + 2200f * mountains) * mtn;
@@ -435,6 +532,19 @@ namespace CLAY.Surface
             bool airy = s.HasAtmo;
             var theme = s.Palette.theme;
             var pal = s.Palette;
+            // green seen from orbit is the PLANTS, not the dirt: strip it out of the ground colour so only the
+            // grassy / mossy types carry vegetation colour (blended back in by their weight at the end)
+            Color orbitalRaw = orbital;
+            float vegHue = 0f;
+            if (pal.vegAmt > 0.01f)
+            {
+                Color co0 = orbital / Mathf.Max(orbital.r + orbital.g + orbital.b, 0.02f);
+                Color cv0 = pal.veg / Mathf.Max(pal.veg.r + pal.veg.g + pal.veg.b, 0.02f);
+                Color d0 = co0 - cv0;
+                vegHue = Mathf.Clamp01(1f - Mathf.Sqrt(d0.r * d0.r + d0.g * d0.g + d0.b * d0.b) * 4f);
+                float l0 = Lum(orbital);
+                orbital = WithLum(Color.Lerp(orbital, pal.landLow, vegHue * 0.9f), l0); orbital.a = 1f;
+            }
             float oL = Mathf.Max(Lum(orbital), 0.01f), oS = Sat(orbital);
             Color region = Region(sm);
             float midL = Mathf.Max(Lum(Color.Lerp(pal.landLow, pal.landHigh, 0.5f)), 0.02f);
@@ -448,7 +558,6 @@ namespace CLAY.Surface
             Color rock = WithLum(Color.Lerp(bed, pal.landHigh, 0.2f * (1f - white)), oL * Mathf.Lerp(0.82f, 0.95f, white));
             Color sand = WithLum(Color.Lerp(orbital, pal.landHigh, 0.12f), Mathf.Min(oL * 1.15f + 0.01f, 0.9f));
             Color soil = WithLum(Color.Lerp(bed, pal.landLow, 0.4f * (1f - white)), oL * Mathf.Lerp(0.72f, 0.92f, white));
-            if (pal.vegAmt > 0.01f) soil = Color.Lerp(soil, WithLum(pal.veg, Mathf.Max(oL * 0.8f, 0.05f)), Mathf.Clamp01(pal.vegAmt * 1.3f));
             // snow/ice takes the ORBITAL colour where the map is already icy (a carbon world's frost isn't the palette ice)
             Color snow = Color.Lerp(pal.ice, orbital, SS(0.45f, 0.75f, oL) * 0.8f); snow = WithLum(snow, Mathf.Max(oL, Lum(pal.ice) * 0.9f)); snow.a = 1f;
 
@@ -478,7 +587,7 @@ namespace CLAY.Surface
                 float vegO = 0f;
                 if (pal.vegAmt > 0.01f)
                 {
-                    Color co = orbital / Mathf.Max(orbital.r + orbital.g + orbital.b, 0.02f);
+                    Color co = orbitalRaw / Mathf.Max(orbitalRaw.r + orbitalRaw.g + orbitalRaw.b, 0.02f);
                     Color cv = pal.veg / Mathf.Max(pal.veg.r + pal.veg.g + pal.veg.b, 0.02f);
                     Color dv = co - cv;
                     vegO = Mathf.Clamp01(1f - Mathf.Sqrt(dv.r * dv.r + dv.g * dv.g + dv.b * dv.b) * 6f) * (1f - SS(0.55f, 0.8f, oL));
@@ -567,6 +676,58 @@ namespace CLAY.Surface
                 sc[(int)TerrainType.Molten] += SS(0.85f, 1f, sm.volcano) * SS(0.7f, 0.95f, volc) * (theme == PlanetTexture.ChemTheme.Lava ? 3f : 1.2f);
                 sc[(int)TerrainType.Scree] += sm.chasm * 1.5f;
                 sc[(int)TerrainType.Gravel] += sm.valley * (hydro != null && !hydro.wet ? 0.8f : 0f);   // dry riverbeds
+                // the category's signature ground
+                switch (category)
+                {
+                    case PlanetCategory.Obsidian: case PlanetCategory.BasaltPlains: sc[(int)TerrainType.BasaltFlow] += 1.6f; break;
+                    case PlanetCategory.LavaOcean: case PlanetCategory.GlassRain: case PlanetCategory.SilicateVapor:
+                    case PlanetCategory.PostGiantImpact: case PlanetCategory.CarbonLava: sc[(int)TerrainType.Molten] += 1.4f; sc[(int)TerrainType.BasaltFlow] += 0.8f; break;
+                    case PlanetCategory.Sulfur: case PlanetCategory.HellMoon: sc[(int)TerrainType.Sulfur] += 1.5f; break;
+                    case PlanetCategory.SaltFlat: case PlanetCategory.Halide: sc[(int)TerrainType.SaltFlat] += 1.2f * flat; break;
+                    case PlanetCategory.IronWorld: case PlanetCategory.SuperMercury: case PlanetCategory.IronSnow: sc[(int)TerrainType.MetallicRock] += 1.4f; break;
+                    case PlanetCategory.CrateredDead: case PlanetCategory.RegolithDust: case PlanetCategory.FlareScoured: sc[(int)TerrainType.Regolith] += 1.2f; break;
+                    case PlanetCategory.Glacier: case PlanetCategory.Snowball: case PlanetCategory.EuropaType: case PlanetCategory.EnceladusType:
+                    case PlanetCategory.NitrogenIce: case PlanetCategory.DryIce: sc[(int)TerrainType.IceSheet] += 1.2f * flat; sc[(int)TerrainType.Snow] += 0.6f; break;
+                    case PlanetCategory.FrostDesert: sc[(int)TerrainType.Frost] += 1.4f; break;
+                    case PlanetCategory.Tar: case PlanetCategory.Carbon: sc[(int)TerrainType.FineSoil] += 1f; break;
+                    case PlanetCategory.Canyon: case PlanetCategory.Mesa: sc[(int)TerrainType.Rocky] += 0.6f; sc[(int)TerrainType.Scree] += 0.5f; break;
+                    case PlanetCategory.ClayShelf: sc[(int)TerrainType.DriedLake] += 0.9f * flat; sc[(int)TerrainType.Cracked] += 0.6f * flat; break;
+                    case PlanetCategory.Desert: case PlanetCategory.OchreIron: sc[(int)TerrainType.Dunes] += 0.6f; sc[(int)TerrainType.Sandy] += 0.5f; break;
+                    case PlanetCategory.FungalLichen: case PlanetCategory.MicrobialMat: sc[(int)TerrainType.Mossy] += 1.2f; break;
+                    case PlanetCategory.Steppe: sc[(int)TerrainType.Grassy] += 1f; break;
+                }
+                // the geological province's ground
+                float pw = sm.provW;
+                switch ((Province)sm.province)
+                {
+                    case Province.FoldBelt: sc[(int)TerrainType.Rocky] += 0.5f * pw; sc[(int)TerrainType.Scree] += 0.4f * pw; break;
+                    case Province.Rift: sc[(int)TerrainType.Scree] += 0.4f * pw; sc[(int)TerrainType.BasaltFlow] += 0.3f * pw; break;
+                    case Province.VolcanicField: sc[(int)TerrainType.BasaltFlow] += 0.9f * pw; break;
+                    case Province.FloodBasalt: sc[(int)TerrainType.BasaltFlow] += 0.6f * pw; sc[(int)TerrainType.Rocky] += 0.3f * pw; break;
+                    case Province.Badlands: sc[(int)TerrainType.Cracked] += 0.5f * pw; sc[(int)TerrainType.Sandy] += 0.4f * pw; sc[(int)TerrainType.Grassy] *= 1f - 0.6f * pw; break;
+                    case Province.Glaciated: sc[(int)TerrainType.Gravel] += 0.5f * pw; sc[(int)TerrainType.Mossy] += 0.4f * pw; break;
+                    case Province.Karst: sc[(int)TerrainType.Rocky] += 0.35f * pw; break;
+                    case Province.DuneSea: sc[(int)TerrainType.Dunes] += 0.9f * pw; sc[(int)TerrainType.Grassy] *= 1f - 0.8f * pw; break;
+                    case Province.ImpactBasin: sc[(int)TerrainType.Gravel] += 0.3f * pw; break;
+                    case Province.Lowland: sc[(int)TerrainType.FineSoil] += 0.3f * pw; break;
+                }
+            }
+            // CLIFFS: nothing but bare rock holds on very steep ground — no grass, soil, sand or moss on a rock face
+            if (!sm.underwater)
+            {
+                float cliff = SS(0.45f, 0.8f, slope01);
+                if (cliff > 0f)
+                {
+                    for (int k = 0; k < TypeCount; k++)
+                    {
+                        var tt = (TerrainType)k;
+                        bool rocky = tt == TerrainType.Rocky || tt == TerrainType.Scree || tt == TerrainType.Bouldery || tt == TerrainType.BasaltFlow
+                                  || tt == TerrainType.MetallicRock || tt == TerrainType.Molten || tt == TerrainType.IceSheet;
+                        if (!rocky) sc[k] *= 1f - cliff * 0.97f;
+                    }
+                    sc[(int)TerrainType.Rocky] += cliff * 3f;
+                    wV *= 1f - cliff; wS *= 1f - cliff; wR += cliff * 3f;
+                }
             }
             float sum = wR + wS + wI + wV;
             mat = new Vector4(wR, wS, wI, wV) / Mathf.Max(sum, 1e-4f);
@@ -581,6 +742,7 @@ namespace CLAY.Surface
                 soil = Color.Lerp(v, litter, patchCanopy);
                 soil.r = Mathf.Max(soil.r, 0f); soil.g = Mathf.Max(soil.g, 0f); soil.b = Mathf.Max(soil.b, 0f);
             }
+            Color soilBase = soil;
             Color c = rock * mat.x + sand * mat.y + snow * mat.z + soil * mat.w;
             // landform tints
             // (crater floors are NOT darker — that painted flat dark discs where erosion had left no relief)
@@ -609,6 +771,16 @@ namespace CLAY.Surface
                 tot = 0f; for (int k = 0; k < PaletteSize; k++) tot += wv[k];
                 for (int k = 0; k < PaletteSize; k++) wv[k] /= Mathf.Max(tot, 1e-6f);
                 mat = new Vector4(wv[0], wv[1], wv[2], wv[3]); mat2 = new Vector4(wv[4], wv[5], wv[6], wv[7]);
+                // vegetation colour only where grass / moss actually grows
+                float vegShare = 0f;
+                for (int k = 0; k < PaletteSize; k++)
+                    if (palette[k] == (int)TerrainType.Grassy || palette[k] == (int)TerrainType.Mossy) vegShare += wv[k];
+                if (vegShare > 0f && pal.vegAmt > 0.01f)
+                {
+                    float wa = c.a;
+                    Color vc = WithLum(Color.Lerp(pal.veg, Color.Lerp(pal.veg, soilBase, 0.35f), 1f - patchLush), Mathf.Max(Lum(orbitalRaw) * 0.85f, 0.04f));
+                    c = Color.Lerp(c, vc, Mathf.Clamp01(vegShare * 1.1f)); c.a = wa;
+                }
             }
             return c;
         }

@@ -198,6 +198,8 @@ namespace CLAY.Galaxy
                 (ChemTheme.Metallic, airless && mineral > 0.5f ? 1.0f : 0.15f),             // iron/Mercury-type
                 (ChemTheme.Corundum, 0.15f + 0.5f * mineral),                               // Al-rich ruby world
                 (ChemTheme.Tholin, 0.5f));
+            if (p.themeOverride >= 0) cp.theme = (ChemTheme)p.themeOverride;              // planet editor: forced chemistry
+            // a theme with no liquid of its own can still be forced wet by an explicit liquid choice (handled below)
 
             switch (cp.theme)
             {
@@ -354,6 +356,33 @@ namespace CLAY.Galaxy
             if (dry && cp.hasLiquid == false && tc > -20f && tc < 140f
                 && (cp.theme == ChemTheme.Silicate || cp.theme == ChemTheme.Ferrous || cp.theme == ChemTheme.Basaltic))
                 cp.dune = Mathf.Max(cp.dune, 0.4f);
+            // ── causal overrides on the finished palette ──
+            if (p.redox >= 0f)
+            {
+                // oxidised crusts rust (Mars, banded iron); reduced ones stay grey basalt / go tarry with organics
+                float ox = Mathf.Clamp01(p.redox);
+                Color rust = new Color(0.62f, 0.32f, 0.17f), tar = new Color(0.16f, 0.14f, 0.12f), grey = new Color(0.42f, 0.41f, 0.4f);
+                Color target = ox > 0.5f ? Color.Lerp(grey, rust, (ox - 0.5f) * 2f) : Color.Lerp(tar, grey, ox * 2f);
+                float k = Mathf.Abs(ox - 0.5f) * 1.2f;
+                cp.landLow = Color.Lerp(cp.landLow, target * 0.8f, k); cp.landMid = Color.Lerp(cp.landMid, target, k);
+                cp.landHigh = Color.Lerp(cp.landHigh, target * 1.2f, k * 0.8f);
+            }
+            if (p.liquidOverride >= 0)
+            {
+                var lq = (LiquidType)p.liquidOverride;
+                cp.hasLiquid = lq != LiquidType.None;
+                switch (lq)
+                {
+                    case LiquidType.Methane:  cp.oceanShallow = new Color(0.42f, 0.3f, 0.14f); cp.oceanDeep = new Color(0.2f, 0.12f, 0.05f); break;
+                    case LiquidType.Ammonia:  cp.oceanShallow = new Color(0.62f, 0.66f, 0.7f); cp.oceanDeep = new Color(0.28f, 0.32f, 0.4f); break;
+                    case LiquidType.Brine:    cp.oceanShallow = new Color(0.38f, 0.55f, 0.52f); cp.oceanDeep = new Color(0.12f, 0.22f, 0.28f); break;
+                    case LiquidType.Supercritical: cp.oceanShallow = new Color(0.7f, 0.72f, 0.74f); cp.oceanDeep = new Color(0.45f, 0.47f, 0.5f); break;
+                    case LiquidType.Water:    cp.oceanShallow = new Color(0.14f, 0.45f, 0.64f); cp.oceanDeep = new Color(0.05f, 0.18f, 0.36f); break;
+                }
+            }
+            // the documented CATEGORY this world is (PlanetCategories) adds the looks the themes can't express
+            if (PlanetData.IsRocky(p.type))
+                PlanetCategories.ApplyLook(PlanetCategories.Classify(p, cp.theme, seed).cat, ref cp, p);
             return cp;
         }
 
@@ -402,6 +431,7 @@ namespace CLAY.Galaxy
         public static TectonicMode Tectonics(PlanetData p)
         {
             if (!PlanetData.IsRocky(p.type)) return TectonicMode.Dead;
+            if (p.tectonicsOverride >= 0) return (TectonicMode)p.tectonicsOverride;
             float heat = p.volcanism;                                   // youth / tidal-heat proxy
             if (heat > 0.72f) return TectonicMode.HeatPipe;             // Io-like, resurfaced faster than it craters
             bool wet = p.waterCoverage > 0.18f;
@@ -884,49 +914,17 @@ namespace CLAY.Galaxy
         // so a frozen ocean-type world reads "Ice World", not "Ocean".
         public static string DisplayType(PlanetData p, ulong seed)
         {
-            if (p.type == PlanetType.GasGiant || p.type == PlanetType.IceGiant)
-                return GiantSubtype(p, seed) switch
-                {
-                    GiantType.HotJupiter => "Hot Jupiter",
-                    GiantType.SubNeptune => "Sub-Neptune",
-                    GiantType.HeliumGiant => "Helium Giant",
-                    GiantType.Superstorm => "Superstorm Giant",
-                    GiantType.IceGiant => "Ice Giant",
-                    _ => "Gas Giant",
-                };
-            string s = Chem(p, seed).theme switch
-            {
-                ChemTheme.Biosphere => "Living World",
-                ChemTheme.Pelagic => "Ocean World",
-                ChemTheme.Snowball => "Ice World",
-                ChemTheme.SalineIce => "Ice World · subsurface ocean",
-                ChemTheme.Lava => "Lava World",
-                ChemTheme.Sulfuric => "Sulfur World",
-                ChemTheme.Basaltic => "Basaltic World",
-                ChemTheme.Carbonaceous => "Carbon World",
-                ChemTheme.Cupric => "Copper World",
-                ChemTheme.Halide => "Salt-Crust World",
-                ChemTheme.Evaporite => "Salt-Flat World",
-                ChemTheme.Tholin => "Tholin World",
-                ChemTheme.Methanic => "Methane World",
-                ChemTheme.AmmoniaIce => "Ammonia-Ice World",
-                ChemTheme.Ferrous => "Iron-Oxide World",
-                ChemTheme.Metallic => "Metallic World",
-                ChemTheme.Corundum => "Corundum World",
-                _ => "Rocky World",
-            };
-            if (p.tidallyLocked) return s + " · tidally locked";
-            // Rotational character (only when notable) so the spin class reads in the header.
-            if (p.axialTiltDeg > 90f) s += " · retrograde";
-            else if (p.axialTiltDeg > 45f) s += " · high obliquity";
-            if (p.rotationHours < 6f) s += " · fast rotator";
-            else if (p.rotationHours > 250f) s += " · slow rotator";
+            var theme = PlanetData.IsRocky(p.type) ? Chem(p, seed).theme : ChemTheme.Silicate;
+            var cls = PlanetCategories.Classify(p, theme, seed);
+            string s = PlanetCategories.Name(cls.cat);
+            foreach (var t in cls.tags) s += " · " + t;
             return s;
         }
 
         public static bool HasAtmosphere(PlanetData p)
         {
             if (p.type == PlanetType.GasGiant || p.type == PlanetType.IceGiant) return true;
+            if (PlanetPhysics.HasAtmosphereOverride(p, out bool forced)) return forced;   // planet editor
             if (!PlanetData.IsRocky(p.type)) return false;
             // Escape vs thermal escape: the mass needed to hold gas rises steeply with temperature. Cold worlds
             // retain air at very low mass (Titan, 0.022 M⊕ at −179 °C, keeps a thick N₂ atmosphere); warm worlds
@@ -959,6 +957,8 @@ namespace CLAY.Galaxy
                 case PlanetType.GasGiant: return new Color(0.85f, 0.72f, 0.55f);
                 case PlanetType.IceGiant: return new Color(0.45f, 0.68f, 0.95f);
             }
+            // an explicit gas mix (planet editor) decides the sky colour from what scatters / absorbs
+            if (p.atmo != null) return PlanetPhysics.SkyTint(p.atmo, p.pressureOverrideBar >= 0f ? p.pressureOverrideBar : 1f);
             float t = p.meanTempC;
             var rng = new DetRng(DetRng.Hash(seed, 0xA7307u));
             if (t > 200f)  return new Color(0.92f, 0.87f, 0.72f) * rng.Range(0.9f, 1.05f);   // hot CO₂ / sulfuric haze

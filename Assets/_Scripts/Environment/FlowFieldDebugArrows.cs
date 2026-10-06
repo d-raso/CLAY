@@ -107,8 +107,10 @@ public class FlowFieldDebugArrows : MonoBehaviour
 
             Vector3 sTail = cam.WorldToScreenPoint(wTail);
             Vector3 sHead = cam.WorldToScreenPoint(wHead);
-            Vector2 a = new Vector2(sTail.x, sTail.y);
-            Vector2 b = new Vector2(sHead.x, sHead.y);
+            // OnGUI's pixel space has its origin at the TOP-left; WorldToScreenPoint's is bottom-left — flip y, or every
+            // arrow is drawn vertically mirrored (wrong place, wrong vertical direction)
+            Vector2 a = new Vector2(sTail.x, Screen.height - sTail.y);
+            Vector2 b = new Vector2(sHead.x, Screen.height - sHead.y);
 
             if (mag < stillSpeed)
             {

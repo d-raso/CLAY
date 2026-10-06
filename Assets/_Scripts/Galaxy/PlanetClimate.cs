@@ -71,8 +71,9 @@ namespace CLAY.Galaxy
 
             // ── air ──
             float dens = PlanetTexture.AtmosphereDensity(p);
-            c.pressureBar = c.hasAtmosphere
-                ? Mathf.Clamp(dens * 2.1f * Mathf.Sqrt(Mathf.Clamp(c.gravity, 0.1f, 4f)) + Mathf.Max(0f, p.greenhouseK - 25f) / 30f, 0.01f, 95f)
+            c.pressureBar = p.pressureOverrideBar >= 0f ? p.pressureOverrideBar
+                : c.hasAtmosphere
+                ? Mathf.Clamp((dens * 2.1f * Mathf.Sqrt(Mathf.Clamp(c.gravity, 0.1f, 4f)) + Mathf.Max(0f, p.greenhouseK - 25f) / 30f) * PlanetPhysics.StrippingFactor(p), 0.01f, 95f)
                 : 0f;
             bool biosphere = p.habClass == HabClass.Habitable;
             float co2 = 280f * (0.7f + 2.5f * p.volcanism) * (1f + Mathf.Max(0f, p.greenhouseK - 30f) / 15f);

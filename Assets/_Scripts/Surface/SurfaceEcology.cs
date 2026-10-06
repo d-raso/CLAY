@@ -45,7 +45,8 @@ namespace CLAY.Surface
             public readonly HashSet<Biome> biomes = new();
             public float patchScale, patchSeed, usable;
             public float rangeScale, rangeSeed, rangeCut;   // geographic range: each species lives in its own regions
-            public float xeric, hydric, shadeTol;            // niche: dry-site specialist, water-lover, shade tolerance (0..1)
+            public float xeric, hydric, shadeTol;
+            public float crownR = -1f, crownLo, crownHi;    // crown footprint radius + height band (unit scale), from the built foliage            // niche: dry-site specialist, water-lover, shade tolerance (0..1)
             public Material wood, leaf, flower;
             public readonly Mesh[,] mesh = new Mesh[3, 3];      // [lod, part]
             public readonly bool[] built = new bool[3], requested = new bool[3];
@@ -411,6 +412,12 @@ namespace CLAY.Surface
                 var b = PlantBuilder.Build(sp.g);
                 PlantBuilder.Detail = 1f;
                 sp.mesh[lod, 0] = b.wood; sp.mesh[lod, 1] = b.foliage; sp.mesh[lod, 2] = b.flower;
+                if (lod == 0 && b.foliage != null && b.foliage.vertexCount > 0)
+                {
+                    var fb = b.foliage.bounds;
+                    sp.crownLo = fb.min.y; sp.crownHi = fb.max.y;
+                    sp.crownR = Mathf.Max(Mathf.Max(Mathf.Abs(fb.min.x), fb.max.x), Mathf.Max(Mathf.Abs(fb.min.z), fb.max.z)) * 0.85f;
+                }
                 sp.built[lod] = true;
             }
         }
@@ -461,6 +468,9 @@ namespace CLAY.Surface
             float windA = (float)(DetRng.Hash(seed, 0x71D1UL) % 6283UL) / 1000f;
             Vector2 windDir = new Vector2(Mathf.Cos(windA), Mathf.Sin(windA));
             var cand = new List<int>(); var w = new List<float>();
+            // CROWN SPACE: crowns already standing in this cell (x, z, radius, bottom, top) — plants compete for space,
+            // they don't grow through each other: a newcomer whose crown would intersect one shrinks to fit or isn't placed
+            var crowns = new List<(float x, float z, float r, float lo, float hi)>(64);
             for (int role = 0; role < 4; role++)
             {
                 float dens = Density(lc0.biome, (Role)role);
@@ -550,6 +560,26 @@ namespace CLAY.Surface
                     else if (rl == Role.Canopy && age > 0.93f) scale = r.Range(1.25f, 1.55f);
                     else scale = r.Range(0.75f, 1.2f);
                     if (rl == Role.Canopy && scale > 0.6f && r.Value < 0.03f + (1f - limit) * 0.12f + exposure * 0.05f) dead = true;
+                    if (rl <= Role.Understory)
+                    {
+                        float cr = csp.crownR > 0f ? csp.crownR : csp.g.heightM * 0.3f;
+                        float clo = csp.crownR > 0f ? csp.crownLo : csp.g.heightM * 0.45f, chi = csp.crownR > 0f ? csp.crownHi : csp.g.heightM;
+                        float sc0 = scale * limit;
+                        float fit = 1f;
+                        foreach (var c in crowns)
+                        {
+                            float dx = c.x - px, dz = c.z - pz, dist = Mathf.Sqrt(dx * dx + dz * dz);
+                            // the largest scale at which the crowns don't overlap in plan AND height
+                            float sH = Mathf.Max(0f, (dist - c.r * 0.9f) / Mathf.Max(cr * sxz * 0.9f, 1e-3f));
+                            float nLo = sm.heightM + clo * sy * sc0, nHi = sm.heightM + chi * sy * sc0;
+                            bool clear = nHi < c.lo || nLo > c.hi;                            // stacked (understorey under canopy) is fine
+                            if (!clear) fit = Mathf.Min(fit, sH / Mathf.Max(sc0, 1e-3f));
+                        }
+                        if (fit < 0.55f) continue;                                       // no room: something else already holds this spot
+                        scale *= Mathf.Min(fit, 1f);
+                        float fs = scale * limit;
+                        crowns.Add((px, pz, cr * sxz * fs, sm.heightM + clo * sy * fs, sm.heightM + chi * sy * fs));
+                    }
                     // wind-bent: lean downwind on exposed ground
                     float lean = exposure * Mathf.Clamp(lc.windLoad, 0.2f, 3f) * 7f + slope * 2f;
                     list.Add(new Inst

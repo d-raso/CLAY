@@ -18,6 +18,8 @@ Shader "CLAY/PlanetAtmosphere"
         _Intensity("Density", Range(0, 3)) = 0.55
         _Softness("Softness", Range(0.5, 3)) = 1.2
         _DayBias("Day Bias", Range(0, 1)) = 0.2
+        _Aurora("Aurora strength", Range(0, 1)) = 0
+        _AuroraColor("Aurora colour", Color) = (0.3, 1, 0.5, 1)
     }
     SubShader
     {
@@ -41,7 +43,8 @@ Shader "CLAY/PlanetAtmosphere"
             half4 _AtmColor;
             float4 _SunDir, _CamPosObj, _Sun2Dir;
             half4 _Sun1Col, _Sun2Col;
-            float _InnerR, _OuterR, _Intensity, _Softness, _DayBias;
+            float _InnerR, _OuterR, _Intensity, _Softness, _DayBias, _Aurora;
+            half4 _AuroraColor;
 
             v2f vert(appdata v)
             {
@@ -51,6 +54,13 @@ Shader "CLAY/PlanetAtmosphere"
                 return o;
             }
 
+                // small smooth 2D value noise for the aurora oval
+                float AurH(float2 q) { return frac(sin(dot(q, float2(127.1, 311.7))) * 43758.5453); }
+                float AurN(float2 q)
+                {
+                    float2 i = floor(q), f = frac(q); f = f * f * (3.0 - 2.0 * f);
+                    return lerp(lerp(AurH(i), AurH(i + float2(1, 0)), f.x), lerp(AurH(i + float2(0, 1)), AurH(i + float2(1, 1)), f.x), f.y);
+                }
             half4 frag(v2f i) : SV_Target
             {
                 // View ray in object space. Camera position supplied by the CPU — the GPU world-to-object
@@ -83,6 +93,32 @@ Shader "CLAY/PlanetAtmosphere"
                 float lit = saturate(sun * sun + sun2 * sun2);
                 half3 col = _AtmColor.rgb * ((0.15 + 0.85 * sun) * _Sun1Col.rgb + 0.85 * sun2 * _Sun2Col.rgb);
                 float a = saturate(column * _Intensity * lit);
+                // aurorae: flickering curtains on rings ~20° from the poles, only where it's dark
+                if (_Aurora > 0.001)
+                {
+                    // tilted magnetic pole; the oval wobbles, bulges and folds instead of being a perfect ring
+                    float3 mp = normalize(float3(0.16, 1.0, 0.09));
+                    float3 nn = nrm.y < 0 ? -nrm : nrm; float3 mpp = mp;
+                    float lat = dot(nn, mpp);
+                    float3 e1 = normalize(cross(mpp, float3(0, 0, 1))), e2 = cross(mpp, e1);
+                    float lon = atan2(dot(nn, e2), dot(nn, e1));
+                    float at = _Time.y;
+                    float2 c2 = float2(cos(lon), sin(lon));
+                    float wob = AurN(c2 * 1.6 + at * 0.03) * 0.06 + AurN(c2 * 4.0 - at * 0.07) * 0.025;   // oval shape
+                    float centre = 0.925 + wob - 0.02 + c2.x * 0.015;                               // pushed toward the night side
+                    float width = 0.02 + 0.025 * AurN(c2 * 2.3 + 11.0 + at * 0.05);
+                    float ad = lat - centre;
+                    float ring = exp(-ad * ad / (width * width)) + 0.35 * exp(-pow((ad - width * 1.8) / (width * 0.6), 2.0)) * AurN(c2 * 3.0 + 5.0);
+                    // curtains: folded rays along the oval, drifting, with bright knots — not even stripes
+                    float fold = AurN(c2 * 9.0 + float2(at * 0.15, -at * 0.11) + ad * 18.0);
+                    float rays = AurN(c2 * 16.0 + fold * 1.8 + float2(at * 0.4, ad * 30.0));
+                    float patchy = smoothstep(0.25, 0.75, AurN(c2 * 2.5 + float2(-at * 0.05, at * 0.04)));
+                    float curtain = (0.25 + 0.75 * rays * rays) * (0.3 + 0.7 * patchy);
+                    float night = saturate(1.0 - sun * 1.8);
+                    float aur = ring * curtain * night * _Aurora * saturate(column * 2.0 + 0.3);
+                    col = col * (a / max(a + aur, 1e-4)) + _AuroraColor.rgb * 1.8 * (aur / max(a + aur, 1e-4));
+                    a = saturate(a + aur);
+                }
                 return half4(col, a);
             }
             ENDCG

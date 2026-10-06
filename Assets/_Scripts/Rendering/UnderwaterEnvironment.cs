@@ -23,6 +23,10 @@ public class UnderwaterEnvironment : MonoBehaviour
     [Range(0f, 1f)]
     [Tooltip("Overall water clarity. 0 = crystal clear, 1 = extremely murky")]
     public float murkiness = 0.4f;
+    [Tooltip("Multiplier on the film grain (the cell stage turns it down at protocell scale).")]
+    public float grainScale = 1f;
+    [Tooltip("Gaussian depth-of-field blur on/off.")]
+    public bool depthOfFieldOn = true;
     [Range(0f, 50f)]
     public float visibilityDistance = 20f;
 
@@ -137,11 +141,12 @@ public class UnderwaterEnvironment : MonoBehaviour
         // Film grain - organic underwater texture
         filmGrain.active = true;
         filmGrain.type.Override(FilmGrainLookup.Medium3);
-        filmGrain.intensity.Override(0.15f + murkiness * 0.2f);
+        filmGrain.intensity.Override((0.15f + murkiness * 0.2f) * grainScale);
+        filmGrain.active = grainScale > 0.001f;
         filmGrain.response.Override(0.5f);
 
         // Depth of field - visibility falloff
-        depthOfField.active = true;
+        depthOfField.active = depthOfFieldOn;
         depthOfField.mode.Override(DepthOfFieldMode.Gaussian);
         depthOfField.gaussianStart.Override(visibilityDistance * 0.5f);
         depthOfField.gaussianEnd.Override(visibilityDistance);

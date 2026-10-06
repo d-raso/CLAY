@@ -95,6 +95,153 @@ namespace CLAY.Galaxy
             }
         }
 
+        /// <summary>
+        /// A single-planet system built from explicit parameters (the PLANET EDITOR). Uses the same physics as the
+        /// galaxy generator — insolation from every star, equilibrium + greenhouse temperature, habitability, tidal
+        /// locking, chemistry, moons — but any value the spec sets is forced instead of rolled.
+        /// </summary>
+        public static StarSystem GenerateCustom(PlanetSpec spec)
+        {
+            static bool Auto(float v) => float.IsNaN(v);
+            var gp = SystemGenParams.Default;
+            var rng = new DetRng(spec.seed == 0UL ? 1UL : spec.seed);
+            var sys = new StarSystem { seed = spec.seed };
+
+            // star: mass inside the chosen class, age as a fraction of its life, metallicity
+            var info = Astrophysics.Classes[spec.starClass];
+            float M = Mathf.Exp(Mathf.Lerp(Mathf.Log(info.massLo), Mathf.Log(info.massHi), Mathf.Clamp01(spec.starMassT)));
+            float life = Astrophysics.LifetimeGyr(M, Astrophysics.MassToLuminosity(M));
+            float age = Mathf.Max(0.01f, Mathf.Clamp01(spec.ageFrac) * Mathf.Min(life, 13.6f));
+            sys.star = StarFromMass(M, age, spec.metallicity, gp);
+            sys.star.properName = NameGen.Star(spec.seed);
+            var A = sys.star;
+
+            // optional companion
+            float L = A.luminosity, Mhost = A.stellarMass, extFlux = 0f, extTemp = 0f; int host = 0;
+            sys.binary = BinaryKind.Single;
+            if (spec.binary)
+            {
+                float sep = Mathf.Max(0.03f, spec.companionSepAU);
+                var B = StarFromMass(Mathf.Max(0.08f, M * Mathf.Clamp(spec.companionMassRatio, 0.05f, 1f)), age, spec.metallicity, gp);
+                B.isCompanion = true; B.properName = A.properName + " B";
+                B.orbit = new OrbitElements { semiMajorAxisAU = sep, eccentricity = sep < 0.6f ? 0.05f : 0.2f, inclinationDeg = 3f,
+                                              ascendingNodeDeg = rng.Range(0f, 360f), argPeriapsisDeg = rng.Range(0f, 360f), meanAnomalyDeg = rng.Range(0f, 360f) };
+                sys.companions.Add(B);
+                sys.binary = sep < 0.6f ? BinaryKind.Close : sep < 9f ? BinaryKind.Intermediate : BinaryKind.Wide;
+                if (sys.binary == BinaryKind.Close) { L += B.luminosity; Mhost += B.stellarMass; host = -1; }
+                else { extFlux = B.luminosity / (sep * sep); extTemp = B.effectiveTemp; }
+            }
+
+            // planet
+            var type = spec.type;
+            bool rocky = PlanetData.IsRocky(type);
+            float d = Mathf.Max(0.005f, spec.distanceAU);
+            float mass = Mathf.Max(0.01f, spec.massEarth);
+            float S = L / (d * d) + extFlux;
+            Astrophysics.HabitableZone(L, out float hzIn, out float hzOut);
+            bool inHZ = S <= L / Mathf.Pow(hzIn * 0.75f, 2f) && S >= L / Mathf.Pow(hzOut * 1.25f, 2f);
+            float albedo = !Auto(spec.albedo) ? spec.albedo
+                         : (type == PlanetType.FrozenRock || type == PlanetType.IceGiant) ? 0.6f : 0.3f;
+            float green = !Auto(spec.greenhouseK) ? spec.greenhouseK
+                        : rocky ? Mathf.Clamp01(Mathf.Log(mass + 1f) / 1.6f) * 33f * Mathf.Clamp01(S / 1.2f) : 0f;
+            if (Auto(spec.greenhouseK) && rocky && (!Auto(spec.pressureBar) || spec.atmoPreset >= 0))
+            {
+                // warming from the column of absorbers: √P × (baseline + CO₂ + CH₄ + H₂O); Mars ≈ 5 K, Earth ≈ 30 K, Venus ≈ 500 K
+                float P = !Auto(spec.pressureBar) ? spec.pressureBar : 1f;
+                var gas = spec.atmoPreset >= 0 ? AtmoComposition.Preset(spec.atmoPreset).Normalised() : new AtmoComposition { n2 = 0.78f, o2 = 0.21f, h2o = 0.01f };
+                green = Mathf.Clamp(Mathf.Sqrt(Mathf.Max(P, 0f)) * (25f + 55f * gas.co2 + 40f * gas.ch4 + 120f * gas.h2o + 30f * gas.h2 * Mathf.Min(P, 10f) / 10f), 0f, 520f);
+            }
+            float Teq = 278.5f * Mathf.Pow(Mathf.Max(S, 1e-6f) * (1f - albedo), 0.25f);
+            float Tc = Teq + green - 273.15f;
+            float radius = !Auto(spec.radiusEarth) ? spec.radiusEarth
+                         : rocky ? Mathf.Pow(mass, 0.27f)
+                         : type == PlanetType.GasGiant ? Mathf.Clamp(11.2f * Mathf.Pow(mass / 318f, -0.04f), 8f, 14f)
+                         : Mathf.Clamp(3.9f * Mathf.Pow(mass / 17f, 0.3f), 2f, 6f);
+            float hostT = A.effectiveTemp;
+            if (host < 0)
+            {
+                var B = sys.companions[0];
+                hostT = Mathf.Pow((A.luminosity * Mathf.Pow(A.effectiveTemp, 4f) + B.luminosity * Mathf.Pow(B.effectiveTemp, 4f)) / L, 0.25f);
+            }
+
+            var p = new PlanetData
+            {
+                index = 0, name = A.properName + "-b", type = type, hostStarTempK = hostT,
+                hostStar = host, secondaryFlux = extFlux, secondaryStarTempK = extTemp,
+                colloquial = NameGen.Colloquial(DetRng.Hash(spec.seed, 13UL)),
+                semiMajorAxisAU = d, mass = mass, albedo = albedo, insolation = S, greenhouseK = green, meanTempC = Tc, inHZ = inHZ,
+                axialTiltDeg = spec.axialTiltDeg, rotationHours = Mathf.Max(0.5f, spec.rotationHours), radiusEarth = radius,
+                orbit = new OrbitElements { semiMajorAxisAU = d, eccentricity = Mathf.Clamp(spec.eccentricity, 0f, 0.9f),
+                                            inclinationDeg = spec.inclinationDeg, ascendingNodeDeg = rng.Range(0f, 360f),
+                                            argPeriapsisDeg = rng.Range(0f, 360f), meanAnomalyDeg = rng.Range(0f, 360f) },
+                themeOverride = spec.theme,
+                starFlareActivity = A.flareActivity,
+                pressureOverrideBar = Auto(spec.pressureBar) ? -1f : Mathf.Max(0f, spec.pressureBar),
+                atmo = spec.atmoPreset >= 0 ? AtmoComposition.Preset(spec.atmoPreset) : null,
+                magneticField = Auto(spec.magneticField) ? -1f : spec.magneticField,
+                flareDose = Auto(spec.flareDose) ? -1f : spec.flareDose,
+                liquidOverride = spec.liquid,
+                redox = Auto(spec.redox) ? -1f : spec.redox,
+                tectonicsOverride = spec.tectonics,
+            };
+
+            // habitability (same model as the galaxy), then the editor's override
+            float stellarSuit = A.Suitability().overall;
+            float tempScore = Astrophysics.Bell(Tc, 0f, 42f, 45f), massScore = Astrophysics.Bell(mass, 0.4f, 3.5f, 3.5f);
+            float presScore = rocky ? Astrophysics.Bell(Mathf.Log(mass + 1f), 0.3f, 2.2f, 1.2f) : 0f;
+            p.habitabilityIndex = Mathf.Clamp01((rocky ? 1f : 0f) * tempScore * massScore * presScore * stellarSuit);
+            p.habClass = !rocky ? HabClass.NotViable
+                       : p.habitabilityIndex >= 0.55f ? HabClass.Habitable
+                       : p.habitabilityIndex >= 0.28f ? HabClass.Marginal : HabClass.Hostile;
+            if (p.habClass == HabClass.Habitable && !PlanetTexture.HasAtmosphere(p)) p.habClass = HabClass.Hostile;
+            if (rocky && spec.habMode == 1) { p.habClass = HabClass.Habitable; p.habitabilityIndex = Mathf.Max(p.habitabilityIndex, 0.7f); }
+            if (spec.habMode == 2 && p.habClass == HabClass.Habitable) p.habClass = HabClass.Hostile;
+
+            // composition
+            p.volcanism = !Auto(spec.volcanism) ? Mathf.Clamp01(spec.volcanism)
+                        : rocky ? Mathf.Clamp01(0.55f * (1f - 0.4f * A.stellarAgeGyr / Mathf.Max(1f, A.lifetimeGyr))) : 0f;
+            p.mineralDiversity = !Auto(spec.mineralDiversity) ? Mathf.Clamp01(spec.mineralDiversity) : Mathf.Clamp01(0.6f * (0.6f + A.metallicity));
+
+            // spin
+            bool lockAuto = rocky && d < 0.45f * Mhost;
+            p.tidallyLocked = spec.lockMode == 1 || (spec.lockMode == 0 && lockAuto);
+            if (p.tidallyLocked) p.rotationHours = p.orbit.PeriodYears(Mhost) * 8766f;
+            if (spec.lockMode == 3)                                     // Mercury: 3 spins per 2 orbits
+            {
+                p.spinResonance32 = true; p.tidallyLocked = false;
+                p.rotationHours = p.orbit.PeriodYears(Mhost) * 8766f * 2f / 3f;
+            }
+
+            // water
+            p.waterChemistry = spec.waterChemistry >= 0 ? (WaterChemistry)spec.waterChemistry
+                             : p.habClass == HabClass.Habitable ? WaterChemistry.Clear
+                             : p.volcanism > 0.6f ? WaterChemistry.Iron
+                             : p.mineralDiversity > 0.6f ? WaterChemistry.Phosphate : WaterChemistry.Clear;
+            p.waterCoverage = !Auto(spec.waterCoverage) ? Mathf.Clamp01(spec.waterCoverage)
+                            : p.habClass == HabClass.Habitable ? 0.6f
+                            : type == PlanetType.Ocean ? 0.8f
+                            : (rocky && Tc > -25f && Tc < 90f ? 0.2f : 0f);
+
+            sys.planets.Add(p);
+
+            // moons: the generator's model, then capped / topped up to the requested count
+            if (spec.moons != 0)
+            {
+                for (int attempt = 0; attempt < 12; attempt++)
+                {
+                    p.moons.Clear();
+                    GenerateMoons(ref rng, sys);
+                    if (spec.moons < 0 || p.moons.Count >= spec.moons) break;
+                }
+                if (spec.moons > 0 && p.moons.Count > spec.moons) p.moons.RemoveRange(spec.moons, p.moons.Count - spec.moons);
+            }
+
+            ApplyCrossBodyFactors(sys);
+            if (!Auto(spec.bombardment)) p.bombardment = Mathf.Clamp01(spec.bombardment);
+            if (!Auto(spec.tidalHeat)) p.tidalHeat = Mathf.Clamp01(spec.tidalHeat);
+            return sys;
+        }
+
         /// <summary>A whole stellar population — <paramref name="count"/> systems from one galaxy seed.</summary>
         public static List<StarSystem> GeneratePopulation(int count, ulong galaxySeed)
         {
@@ -333,6 +480,7 @@ namespace CLAY.Galaxy
                 {
                     index = i, name = $"{z.prefix}-{k + 1}", hostStarTempK = z.T,
                     hostStar = z.host, secondaryFlux = z.extFlux, secondaryStarTempK = z.extTemp,
+                    starFlareActivity = z.host > 0 ? sys.Star(z.host).flareActivity : sys.star.flareActivity,
                     colloquial = NameGen.Colloquial(DetRng.Hash(sys.seed, (ulong)(i * 2749u + 13u))), type = type,
                     semiMajorAxisAU = d, orbit = orbit, mass = mass, albedo = albedo, insolation = S,
                     greenhouseK = green, meanTempC = Tc, inHZ = inHZ,

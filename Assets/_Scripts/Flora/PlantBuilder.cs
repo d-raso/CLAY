@@ -206,7 +206,7 @@ namespace CLAY.Flora
         {
             if (_limbBudget-- <= 0) return;
             bool split = g.trunkSplits && depth < depthMax - 1;   // this limb forks at its end instead of tapering
-            int segs = Mathf.Clamp(9 - depth, 4, 9);   // more rings along each limb → smoother curves + cleaner junctions
+            int segs = depth == 0 ? 18 : depth == 1 && depthMax > 2 ? 12 : Mathf.Clamp(9 - depth, 4, 9);   // trunk/boughs get many rings so bends stay round, not blocky; more rings along each limb → smoother curves + cleaner junctions
             float seglen = length / segs;
             float endRad = split ? radius * 0.6f : radius * (0.05f + 0.12f * g.trunkTaper);
             var pts = new List<Vector3>(segs + 1); var radii = new List<float>(segs + 1);

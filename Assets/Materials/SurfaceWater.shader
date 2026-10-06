@@ -32,6 +32,7 @@ Shader "CLAY/SurfaceWater"
             #pragma multi_compile _ FOG_EXP
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "Include/SurfAmbient.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareOpaqueTexture.hlsl"
 
@@ -137,7 +138,7 @@ Shader "CLAY/SurfaceWater"
                 float3 trans = exp(-_Absorb.rgb * thick);
                 Light L = GetMainLight(TransformWorldToShadowCoord(i.positionWS));
                 float3 lit = L.color * L.distanceAttenuation * lerp(0.4, 1.0, L.shadowAttenuation);
-                float3 inscat = _Scatter.rgb * (SampleSH(float3(0, 1, 0)) + lit * saturate(L.direction.y + 0.2));
+                float3 inscat = _Scatter.rgb * (SurfSH(float3(0, 1, 0)) + lit * saturate(L.direction.y + 0.2));
                 float3 body = scene * trans + inscat * (1.0 - trans);
 
                 // reflection: sky + sun glint
@@ -154,7 +155,7 @@ Shader "CLAY/SurfaceWater"
                 float shore = (1.0 - smoothstep(0.0, 0.9, thick)) * smoothstep(0.35, 0.65, fn + (1.0 - saturate(thick)) * 0.4);
                 float crestF = smoothstep(0.55, 0.9, i.crest * (0.6 + _WaterWind.z) + fn * 0.3) * saturate(_WaterWind.z * 1.5);
                 float foam = saturate((shore + crestF) * _Foam) * (below ? 0.0 : 1.0);
-                col = lerp(col, (SampleSH(float3(0, 1, 0)) + lit * saturate(dot(float3(0, 1, 0), L.direction) + 0.3)) * 0.9, foam);
+                col = lerp(col, (SurfSH(float3(0, 1, 0)) + lit * saturate(dot(float3(0, 1, 0), L.direction) + 0.3)) * 0.9, foam);
 
                 col = MixFog(col, i.fog);
                 col = (any(isnan(col)) || any(isinf(col))) ? float3(0, 0, 0) : max(col, 0);

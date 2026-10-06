@@ -27,6 +27,7 @@ Shader "CLAY/SurfaceGrass"
             #pragma multi_compile_instancing
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "Include/SurfAmbient.hlsl"
             #include "Include/Clouds.hlsl"
 
             CBUFFER_START(UnityPerMaterial)
@@ -97,7 +98,7 @@ Shader "CLAY/SurfaceGrass"
                 float ao = lerp(0.35, 1.0, i.hf);                                              // the sward shades its own base
                 float3 H = normalize(L.direction + V);
                 float spec = pow(saturate(dot(N, H)), 24.0) * 0.12 * i.hf;                     // waxy sheen
-                float3 col = alb * (SampleSH(N) * ao + lit * (ndl + back * 0.8)) + lit * spec;
+                float3 col = alb * (SurfSH(N) * ao + lit * (ndl + back * 0.8)) + lit * spec;
                 col = MixFog(col, i.fog);
                 col = (any(isnan(col)) || any(isinf(col))) ? float3(0, 0, 0) : max(col, 0);
                 return half4(col, 1);

@@ -54,6 +54,29 @@ namespace CLAY.Surface
                 }
             });
             double rainSum = 0; for (int k = 0; k < n; k++) rainSum += rain[k];
+            // Smooth the coarse heights (3×3 box, twice) before routing: at 3.2 km the rolling hills alias into a field
+            // of false pits, and every false pit would otherwise fill into a 'lake' — flooding whole continents.
+            // Sea cells keep their height so coastlines stay put.
+            var tmp = new float[n];
+            for (int pass = 0; pass < 2; pass++)
+            {
+                for (int j = 0; j < N; j++)
+                    for (int i = 0; i < N; i++)
+                    {
+                        int k = j * N + i;
+                        if (geo.hasSea && H[k] < 0f) { tmp[k] = H[k]; continue; }
+                        float sum = 0f; int c = 0;
+                        for (int dj = -1; dj <= 1; dj++)
+                            for (int di = -1; di <= 1; di++)
+                            {
+                                int ni = i + di, nj = j + dj;
+                                if (ni < 0 || nj < 0 || ni >= N || nj >= N) continue;
+                                sum += H[nj * N + ni]; c++;
+                            }
+                        tmp[k] = sum / c;
+                    }
+                System.Array.Copy(tmp, H, n);
+            }
             float avgRain = (float)(rainSum / n);
 
             // 1. priority-flood with a tiny epsilon so filled flats still drain
@@ -88,15 +111,50 @@ namespace CLAY.Surface
                     }
             }
 
-            // 2. lakes: basins filled well above the ground
-            for (int k = 0; k < n; k++)
+            // 2. lakes: only REAL basins — deep enough (≥ 20 m of fill), spanning several cells, and in a climate wet
+            // enough to fill them (dry basins stay dry: playas). Everything else just drains through.
+            var comp = new int[n]; for (int k = 0; k < n; k++) comp[k] = -1;
+            var stack = new Stack<int>(); var members = new List<int>();
+            var basins = new List<(float vol, int[] mem)>();
+            for (int k0 = 0; k0 < n; k0++)
             {
-                bool lake = F[k] > H[k] + 4f && !(geo.hasSea && H[k] < 0f);
-                hy.lakeLevel[k] = lake ? F[k] : float.NaN;
-                hy.fillF[k] = F[k];
-                hy.fillDepth[k] = (geo.hasSea && H[k] < 0f) ? 0f : Mathf.Max(F[k] - H[k], 0f);
-                if (lake) hy.LakeCells++;
+                hy.fillF[k0] = F[k0];
+                hy.lakeLevel[k0] = float.NaN;
+                if (comp[k0] >= 0 || F[k0] - H[k0] < 20f || (geo.hasSea && H[k0] < 0f)) continue;
+                members.Clear(); stack.Push(k0); comp[k0] = k0;
+                float rainIn = 0f;
+                while (stack.Count > 0)
+                {
+                    int c = stack.Pop(); members.Add(c); rainIn += rain[c];
+                    int ci = c % N, cj = c / N;
+                    for (int dj = -1; dj <= 1; dj++)
+                        for (int di = -1; di <= 1; di++)
+                        {
+                            int ni = ci + di, nj = cj + dj;
+                            if (ni < 0 || nj < 0 || ni >= N || nj >= N) continue;
+                            int nk = nj * N + ni;
+                            if (comp[nk] >= 0 || F[nk] - H[nk] < 20f || (geo.hasSea && H[nk] < 0f)) continue;
+                            comp[nk] = k0; stack.Push(nk);
+                        }
+                }
+                bool real = members.Count >= 3 && rainIn / members.Count > avgRain * 0.8f;
+                if (real)
+                {
+                    float vol = 0f; foreach (int m in members) vol += F[m] - H[m];
+                    basins.Add((vol, members.ToArray()));
+                }
             }
+            // biggest basins first, until lakes cover ~3% of the land (Earth: ~2–4%); smaller ones just drain through
+            basins.Sort((x, y) => y.vol.CompareTo(x.vol));
+            int landCells = 0; for (int k = 0; k < n; k++) if (!(geo.hasSea && H[k] < 0f)) landCells++;
+            int budget = Mathf.Max(3, Mathf.RoundToInt(landCells * 0.03f));
+            foreach (var (vol, mem) in basins)
+            {
+                if (hy.LakeCells + mem.Length > budget) continue;
+                foreach (int m in mem) { hy.lakeLevel[m] = F[m]; hy.LakeCells++; }
+            }
+            for (int k = 0; k < n; k++)
+                hy.fillDepth[k] = float.IsNaN(hy.lakeLevel[k]) ? 0f : Mathf.Max(F[k] - H[k], 0f);
 
             // 3. flow accumulation, from the highest cells down
             var acc = new float[n];
@@ -154,7 +212,7 @@ namespace CLAY.Surface
                 float tx = gx - i0, tz = gz - j0;
                 float Bil(float[] a) => Mathf.Lerp(Mathf.Lerp(a[j0 * N + i0], a[j0 * N + i0 + 1], tx), Mathf.Lerp(a[(j0 + 1) * N + i0], a[(j0 + 1) * N + i0 + 1], tx), tz);
                 float basin = Bil(fillDepth);
-                if (basin > 4f)
+                if (basin > 12f)
                 {
                     float L = Bil(fillF);
                     if (o.heightM < L)
@@ -175,9 +233,11 @@ namespace CLAY.Surface
             foreach (int si in list)
             {
                 var s = segs[si];
-                float mw = Mathf.Min(s.width * 3f + 250f, 1400f);
-                wx = (Noise(fx / 2400f, fz / 2400f, 3.1f) - 0.5f) * mw;
-                wz = (Noise(fx / 2400f, fz / 2400f, 7.7f) - 0.5f) * mw;
+                // meanders: a two-scale warp large enough (≈ half a grid cell) to bend the 3.2 km D8 segments into
+                // winding channels instead of straight 45°/90° runs
+                float mw = Mathf.Clamp(s.width * 6f + 900f, 900f, 2400f);
+                wx = ((Noise(fx / 2600f, fz / 2600f, 3.1f) - 0.5f) * 1.6f + (Noise(fx / 700f, fz / 700f, 5.3f) - 0.5f) * 0.5f) * mw;
+                wz = ((Noise(fx / 2600f, fz / 2600f, 7.7f) - 0.5f) * 1.6f + (Noise(fx / 700f, fz / 700f, 9.9f) - 0.5f) * 0.5f) * mw;
                 float px = fx + wx, pz = fz + wz;
                 float dx = s.bx - s.ax, dz = s.bz - s.az;
                 float t = Mathf.Clamp01(((px - s.ax) * dx + (pz - s.az) * dz) / Mathf.Max(dx * dx + dz * dz, 1f));
@@ -188,6 +248,10 @@ namespace CLAY.Surface
             if (bi < 0) return;
             var sg = segs[bi];
             float level = Mathf.Lerp(sg.la, sg.lb, bt);
+            float hOrig = o.heightM;
+            // the network's level comes from a coarse, smoothed grid; where the real ground here is LOWER, the river
+            // runs at the ground (cut into it), never perched above it
+            level = Mathf.Min(level, hOrig);
             float valleyW = sg.width * 6f + 300f;
             if (best > valleyW) return;
             // broad valley → banks → channel
@@ -202,8 +266,7 @@ namespace CLAY.Surface
                 {
                     // the water surface: at the network's level where the channel is cut into the ground, but never
                     // hovering above the land — where the ground falls away, the water follows it down
-                    float bed = Mathf.Min(o.heightM, level - sg.depth * Mathf.Sqrt(across));
-                    o.heightM = Mathf.Min(level - 0.25f, bed + sg.depth * 0.8f);
+                    o.heightM = Mathf.Min(level, hOrig) - 0.4f - sg.depth * 0.08f * across;   // surface just below the banks
                     o.water = 1f;
                     float dx = sg.bx - sg.ax, dz = sg.bz - sg.az, l = Mathf.Sqrt(dx * dx + dz * dz) + 1e-3f;
                     o.flowX = dx / l; o.flowZ = dz / l;

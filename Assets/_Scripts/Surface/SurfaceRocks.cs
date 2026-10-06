@@ -77,7 +77,7 @@ namespace CLAY.Surface
 
         static Mesh BuildRock(ref DetRng r, Color baseCol, int idx)
         {
-            int lon = 11, lat = 7;
+            int lon = 28, lat = 16;
             float sx = r.Range(0.8f, 1.5f), sy = r.Range(0.45f, 0.95f), sz = r.Range(0.75f, 1.2f);
             float rough = r.Range(0.35f, 0.8f), freq = r.Range(1.2f, 2.4f);
             Vector3 off = new Vector3(r.Range(0f, 50f), r.Range(0f, 50f), r.Range(0f, 50f));
@@ -88,39 +88,59 @@ namespace CLAY.Surface
                     float phi = i / (float)lat * Mathf.PI, th = j / (float)lon * Mathf.PI * 2f;
                     Vector3 d = new Vector3(Mathf.Sin(phi) * Mathf.Cos(th), Mathf.Cos(phi), Mathf.Sin(phi) * Mathf.Sin(th));
                     float n = PlanetTexture.SurfaceSampler.Noise(d * freq + off, 3);
-                    float rr = 0.5f * (1f - rough * 0.5f + rough * n);
+                    // fracture detail: a sharper, higher octave chips planes and ledges into the lump
+                    float n2 = PlanetTexture.SurfaceSampler.Noise(d * freq * 3.7f + off * 1.3f, 2);
+                    float chip = Mathf.Abs(n2 - 0.5f) * 2f;
+                    float rr = 0.5f * (1f - rough * 0.5f + rough * n - chip * 0.12f + (n2 - 0.5f) * 0.08f);
                     Vector3 p = Vector3.Scale(d * rr, new Vector3(sx, sy, sz));
                     if (p.y < -0.12f) p.y = -0.12f - (p.y + 0.12f) * 0.1f;   // flattened base that sits on the ground
                     grid[i * (lon + 1) + j] = p;
                 }
-            // flat-shaded: every triangle gets its own vertices + face normal + face colour
+            // SMOOTH-shaded: shared vertices with area-weighted normals (seam column and poles merged), so the
+            // shape reads as weathered stone; the fine chips/pits come from the shader's bump, not from facets
+            int W = lon + 1;
+            int Id(int i, int j) { if (i == 0) return 0; if (i == lat) return lat * W; return i * W + (j == lon ? 0 : j); }
+            var acc = new Vector3[grid.Length];
+            for (int i = 0; i < lat; i++)
+                for (int j = 0; j < lon; j++)
+                {
+                    int ia = Id(i, j), ib = Id(i, j + 1), ic = Id(i + 1, j), id = Id(i + 1, j + 1);
+                    void Acc(int x, int y, int z)
+                    {
+                        Vector3 fn = Vector3.Cross(grid[y] - grid[x], grid[z] - grid[x]);
+                        if (Vector3.Dot(fn, grid[x] + grid[y] + grid[z]) < 0f) fn = -fn;
+                        acc[x] += fn; acc[y] += fn; acc[z] += fn;
+                    }
+                    Acc(ia, ic, ib); Acc(ib, ic, id);
+                }
             var v = new List<Vector3>(); var nrm = new List<Vector3>(); var col = new List<Color>(); var t = new List<int>();
-            void Tri(Vector3 a, Vector3 b, Vector3 c)
+            var map = new Dictionary<int, int>();
+            int V(int g)
             {
-                Vector3 fn = Vector3.Cross(b - a, c - a);
-                if (fn.sqrMagnitude < 1e-12f) return;
-                fn.Normalize();
-                if (Vector3.Dot(fn, (a + b + c)) < 0f) { var tmp = b; b = c; c = tmp; fn = -fn; }   // outward
-                float h = Mathf.Abs(Mathf.Sin((a.x * 12.9898f + a.y * 78.233f + a.z * 37.719f + idx) * 43758.5453f));
-                float weather = Mathf.Clamp01(fn.y) * 0.25f;                                          // paler tops
-                Color fc = baseCol * (0.8f + h * 0.35f) + new Color(weather, weather, weather) * 0.6f;
+                if (map.TryGetValue(g, out int k)) return k;
+                k = v.Count; map[g] = k;
+                Vector3 pp = grid[g];
+                Vector3 n = acc[g].sqrMagnitude > 1e-12f ? acc[g].normalized : pp.normalized;
+                float h = PlanetTexture.SurfaceSampler.Noise(pp * 3.1f + off * 0.7f, 2);           // smooth mottling, no per-face patchwork
+                float weather = Mathf.Clamp01(n.y) * 0.18f;                                        // paler tops
+                Color fc = baseCol * (0.85f + h * 0.25f) + new Color(weather, weather, weather) * 0.6f;
                 fc.a = 0f;   // alpha = wetness in the terrain shader: rocks are dry
-                int k = v.Count;
-                v.Add(a); v.Add(b); v.Add(c);
-                // softened facets: half face normal, half the rock's round normal — facets still read, but a single
-                // triangle can no longer flash like a mirror or drop to black as the sun moves
-                nrm.Add((fn * 0.45f + a.normalized * 0.55f).normalized);
-                nrm.Add((fn * 0.45f + b.normalized * 0.55f).normalized);
-                nrm.Add((fn * 0.45f + c.normalized * 0.55f).normalized);
-                col.Add(fc); col.Add(fc); col.Add(fc);
-                t.Add(k); t.Add(k + 1); t.Add(k + 2);
+                v.Add(pp); nrm.Add(n); col.Add(fc);
+                return k;
+            }
+            void Tri(int x, int y, int z)
+            {
+                if (x == y || y == z || x == z) return;
+                Vector3 fn = Vector3.Cross(grid[y] - grid[x], grid[z] - grid[x]);
+                if (fn.sqrMagnitude < 1e-14f) return;
+                if (Vector3.Dot(fn, grid[x] + grid[y] + grid[z]) < 0f) { var tmp = y; y = z; z = tmp; }   // outward
+                t.Add(V(x)); t.Add(V(y)); t.Add(V(z));
             }
             for (int i = 0; i < lat; i++)
                 for (int j = 0; j < lon; j++)
                 {
-                    Vector3 a = grid[i * (lon + 1) + j], b = grid[i * (lon + 1) + j + 1];
-                    Vector3 c = grid[(i + 1) * (lon + 1) + j], d = grid[(i + 1) * (lon + 1) + j + 1];
-                    Tri(a, c, b); Tri(b, c, d);
+                    int ia = Id(i, j), ib = Id(i, j + 1), ic = Id(i + 1, j), id = Id(i + 1, j + 1);
+                    Tri(ia, ic, ib); Tri(ib, ic, id);
                 }
             var m = new Mesh { name = $"Rock{idx}" };
             m.SetVertices(v); m.SetNormals(nrm); m.SetColors(col);

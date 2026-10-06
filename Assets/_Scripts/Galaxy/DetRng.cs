@@ -27,6 +27,13 @@ namespace CLAY.Galaxy
         public float Range(float a, float b) => a + (b - a) * Value;
         public float LogRange(float a, float b) => Mathf.Exp(Range(Mathf.Log(a), Mathf.Log(b)));
         public int RangeInt(int aInclusive, int bExclusive) => aInclusive + (int)(Value * (bExclusive - aInclusive));
+        public float NextFloat() => Value;                                         // [0,1)
+        public int NextInt(int aInclusive, int bExclusive) => RangeInt(aInclusive, bExclusive);
+        public Vector2 InsideUnitCircle()
+        {
+            float a = Range(0f, Mathf.PI * 2f), d = Mathf.Sqrt(Value);
+            return new Vector2(Mathf.Cos(a) * d, Mathf.Sin(a) * d);
+        }
 
         /// <summary>Combine two seeds into a well-mixed third (e.g. galaxy seed + system index).</summary>
         public static ulong Hash(ulong a, ulong b)

@@ -75,6 +75,7 @@ namespace CLAY.GalaxyMap
         Vector3 _savedCamPos; Quaternion _savedCamRot;
 
         public Material LastSkyboxMaterial => _skyMat;
+        public bool InSystem => _inSystem;
 
         void Awake()
         {
@@ -87,7 +88,7 @@ namespace CLAY.GalaxyMap
         void Update()
         {
             if (_transitioning) return;
-            if (CLAY.Flora.FloraLab.Active || CLAY.Surface.SurfaceWorld.Active || CLAY.Surface.TerrainLab.Active) return;   // the Flora Lab owns input; don't let its Escape also exit the system
+            if (CLAY.Flora.FloraLab.Active || CLAY.Surface.SurfaceWorld.Active || CLAY.Surface.TerrainLab.Active || CLAY.UI.MainMenu.Blocking) return;   // the Flora Lab owns input; don't let its Escape also exit the system
             if (Input.GetKeyDown(randomSystemKey) && galaxy != null) { StartCoroutine(JumpToRandomSystem()); return; }
             if (_inSystem)
             {
@@ -99,7 +100,7 @@ namespace CLAY.GalaxyMap
 
         void LateUpdate()
         {
-            if (CLAY.Flora.FloraLab.Active || CLAY.Surface.SurfaceWorld.Active || CLAY.Surface.TerrainLab.Active) return;   // sub-screens own the camera
+            if (CLAY.Flora.FloraLab.Active || CLAY.Surface.SurfaceWorld.Active || CLAY.Surface.TerrainLab.Active || CLAY.UI.MainMenu.Blocking) return;   // sub-screens own the camera
             // Enforce telescope state after SystemViewer's own camera update. A telescope = narrow FOV (magnifies,
             // separating stars) + a lower magnitude limit (a bigger aperture reveals fainter stars). Because the
             // stars are point GEOMETRY, zooming in stays crisp and resolves close pairs instead of pixelating.
@@ -619,7 +620,7 @@ namespace CLAY.GalaxyMap
 
         void OnGUI()
         {
-            if (CLAY.Flora.FloraLab.Active || CLAY.Surface.SurfaceWorld.Active || CLAY.Surface.TerrainLab.Active) return;   // sub-screens draw their own UI
+            if (CLAY.Flora.FloraLab.Active || CLAY.Surface.SurfaceWorld.Active || CLAY.Surface.TerrainLab.Active || CLAY.UI.MainMenu.Blocking) return;   // sub-screens draw their own UI
             // Galaxy-mode inference readout.
             if (showReadout && _hasPick && !_inSystem && !_transitioning)
             {

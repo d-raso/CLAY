@@ -25,6 +25,9 @@ namespace CLAY.Surface
         readonly Vector2 windDir;
         Vector2 drift;
         float time, rainWet, snowCover;
+        float groundUnder, groundSmooth = float.NaN;
+        float windGust;                                                          // storm-ocean gales push particles harder
+        public void SetGround(float h) { groundUnder = h; }
         ParticleSystem ps; ParticleSystemRenderer psr; Material pmat; Texture2D dot;
         Precip shownKind = (Precip)(-1);
 
@@ -69,9 +72,15 @@ namespace CLAY.Surface
 
             // cloudiness: the climate's tendency, with fronts drifting through (several-minute periods)
             float tendency = Mathf.Clamp01(humidity * 1.15f + Mathf.Clamp01(geo.climate.pressureBar - 1f) * 0.15f - 0.05f);
+            var cat = geo.category;
+            bool deck = cat == PlanetCategory.VenusGreenhouse || cat == PlanetCategory.SulfuricCloud || cat == PlanetCategory.WaterVapor
+                     || cat == PlanetCategory.PhotochemicalSmog || cat == PlanetCategory.Hycean || cat == PlanetCategory.Tholin;
+            if (deck) tendency = 1f;                                             // a permanent, unbroken deck
+            if (cat == PlanetCategory.StormOcean) tendency = Mathf.Max(tendency, 0.8f);
             float front = Wave(260f, 0.3f) * 0.7f + Wave(90f, 5.1f) * 0.3f;
             float cover = Mathf.Clamp01(tendency * 0.9f + (front - 0.5f) * 0.9f);
             if (methane) cover = Mathf.Max(cover, 0.35f);                          // perpetual photochemical haze decks
+            if (deck) cover = Mathf.Max(cover, 0.95f);
 
             // precipitation: only from thick cloud, only if there's something to condense
             float precip = volatiles ? SS(0.62f, 0.9f, cover) * Mathf.Lerp(0.5f, 1f, humidity) : 0f;
@@ -82,6 +91,10 @@ namespace CLAY.Surface
 
             // dust storms: dry, windy worlds; they come in bursts
             float dust = dustWorld ? SS(0.62f, 0.82f, Wave(180f, 13.3f)) * Mathf.Clamp01(windBase * 0.6f + 0.2f) : 0f;
+            if (cat == PlanetCategory.Desert || cat == PlanetCategory.OchreIron || cat == PlanetCategory.RegolithDust)
+                dust = Mathf.Max(dust, air ? SS(0.5f, 0.75f, Wave(150f, 21.7f)) * 0.8f : 0f);            // seasonal dust storms
+            if (cat == PlanetCategory.StormOcean) precip = Mathf.Max(precip, SS(0.4f, 0.7f, front) * 0.9f);  // squall lines
+            if (precip > 0.02f && kind == Precip.None) kind = methane ? Precip.MethaneRain : here.tMeanC < 0.5f ? Precip.Snow : Precip.Rain;
             Apply(cover * (1f - dust * 0.6f), precip, kind, dust, camPos);
         }
 
@@ -89,7 +102,11 @@ namespace CLAY.Surface
         {
             Cover = cover; PrecipAmt = precip; Kind = kind; Dust = dust;
             // cloud deck: thicker and lower when it's raining; base altitude from the planet's warmth & pressure
-            float baseAlt = Mathf.Lerp(2200f, 900f, precip) * Mathf.Clamp(1f / Mathf.Max(geo.climate.pressureBar, 0.2f), 0.6f, 2.5f);
+            // cloud base is a height ABOVE THE GROUND (convective lifting level), not above sea level — otherwise high
+            // plateaus sit inside or above the deck. Follows the terrain under the camera, smoothed.
+            float agl = Mathf.Lerp(2200f, 900f, precip) * Mathf.Clamp(1f / Mathf.Max(geo.climate.pressureBar, 0.2f), 0.6f, 2.5f);
+            groundSmooth = float.IsNaN(groundSmooth) ? groundUnder : Mathf.Lerp(groundSmooth, groundUnder, Time.unscaledDeltaTime * 0.2f);
+            float baseAlt = Mathf.Max(groundSmooth, 0f) + agl;
             float thick = Mathf.Lerp(900f, 3500f, Mathf.Max(precip, cover * cover));
             Shader.SetGlobalVector("_CloudShape", new Vector4(cover, 0.55f + precip * 0.8f, baseAlt, thick));
             float windSpd = Mathf.Clamp(4f + windBase * 6f, 2f, 45f);
@@ -98,6 +115,15 @@ namespace CLAY.Surface
 
             SunFactor = Mathf.Lerp(1f, 0.25f, cover * cover * 0.9f + precip * 0.2f) * (1f - dust * 0.7f);
             FogFactor = 1f + precip * 5f + dust * 30f;
+            // category atmospheres: a Venus surface is a dim orange twilight under 90 bar; steam worlds are fog banks
+            switch (geo.category)
+            {
+                case PlanetCategory.VenusGreenhouse: SunFactor *= 0.18f; FogFactor *= 6f; break;
+                case PlanetCategory.SulfuricCloud: case PlanetCategory.PhotochemicalSmog: case PlanetCategory.Tholin: SunFactor *= 0.45f; FogFactor *= 3f; break;
+                case PlanetCategory.WaterVapor: SunFactor *= 0.35f; FogFactor *= 10f; break;
+                case PlanetCategory.Hycean: FogFactor *= 2f; break;
+                case PlanetCategory.StormOcean: windGust = 1f; break;
+            }
 
             // the ground soaks up rain quickly and dries slowly; snow settles and melts slowly
             float dt = Time.unscaledDeltaTime;
@@ -163,7 +189,7 @@ namespace CLAY.Surface
             // wind drives everything sideways a little (dust a lot)
             var vel = ps.velocityOverLifetime; vel.enabled = true;
             float side = dust > precip ? 14f : k == Precip.Snow || k == Precip.Ash ? 1.6f : 2.5f;
-            float wind = Mathf.Clamp(windBase, 0.1f, 3f) * side;
+            float wind = Mathf.Clamp(windBase, 0.1f, 3f) * side * (1f + windGust * 2f);
             vel.x = windDir.x * wind; vel.z = windDir.y * wind;
             if (!ps.isPlaying) ps.Play();
         }

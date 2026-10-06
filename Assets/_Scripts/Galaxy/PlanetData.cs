@@ -40,6 +40,18 @@ namespace CLAY.Galaxy
         public float  mineralDiversity;  // 0–1 → light, flat clay-shelf patches
         public float  waterCoverage;     // 0–1 → fraction of surface below sea level
         public WaterChemistry waterChemistry;
+        public int themeOverride = -1;                       // ≥0 forces a PlanetTexture.ChemTheme (planet editor); −1 = derived
+
+        // ── causal parameters (PlanetTypes.md §1). −1 / null = DERIVED by PlanetPhysics; set = forced ──
+        public float pressureOverrideBar = -1f;              // surface pressure, bar
+        public AtmoComposition atmo;                         // gas mix
+        public float magneticField = -1f;                    // 0..1 dynamo strength
+        public int   liquidOverride = -1;                    // LiquidType
+        public float redox = -1f;                            // 0 reducing … 1 oxidising
+        public int   tectonicsOverride = -1;                 // PlanetTexture.TectonicMode
+        public float flareDose = -1f;                        // 0..1
+        public bool  spinResonance32;                        // Mercury-like 3:2 spin–orbit resonance
+        public float starFlareActivity;                      // host star's flare activity (set by the generator)
 
         public bool tidallyLocked;                           // 1:1 spin-orbit → an "eyeball" world (hot substellar, frozen night)
 

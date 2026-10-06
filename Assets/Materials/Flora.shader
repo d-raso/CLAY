@@ -48,10 +48,12 @@ Shader "CLAY/Flora"
             #pragma multi_compile_fog
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "Include/SurfAmbient.hlsl"
 
             // Planet-surface horizon curvature: y drops by d²/2R with distance from the camera (0 = off, e.g. the lab).
             float _CurvK;
             float4 _SurfOrigin;
+            float _BioGlow;
             #include "Include/Clouds.hlsl"
             float3 CurveWS(float3 ws) { float2 d = ws.xz - _WorldSpaceCameraPos.xz; ws.y -= dot(d, d) * _CurvK; return ws; }
 
@@ -98,14 +100,27 @@ Shader "CLAY/Flora"
                 // repetition); _BarkNoise adds high-frequency roughness to the final height (grit / fine cracks).
                 if (_BarkWarp > 0.001)
                 {
-                    u += (fbm2(float2(u * 2.7, v * 1.1)) - 0.5) * _BarkWarp * 2.5;
-                    v += (fbm2(float2(u * 1.1, v * 2.7)) - 0.5) * _BarkWarp * 1.4;
+                    // medium, along-grain meander: the grain wanders, but doesn't curl into swirls everywhere
+                    u += (fbm2(float2(u * 1.6, v * 0.55)) - 0.5) * _BarkWarp * 1.6;
+                    v += (fbm2(float2(u * 0.8, v * 1.3)) - 0.5) * _BarkWarp * 0.6;
+                    // KNOTS: the whorl lives in a few sparse spots (old branch scars) where the grain flows around a point
+                    float2 kc = float2(u * 0.9, v * 0.35);
+                    float2 ki = floor(kc), kf = frac(kc) - 0.5;
+                    float kh = frac(sin(dot(ki, float2(127.1, 311.7))) * 43758.5453);
+                    float2 ko = (float2(frac(kh * 7.13), frac(kh * 3.71)) - 0.5) * 0.5;
+                    float2 kd = kf - ko; kd.y *= 1.6;
+                    float kr = length(kd);
+                    float knot = (kh < 0.35 + _BarkWarp * 0.4) ? exp(-kr * kr / 0.018) : 0.0;
+                    float kang = knot * 2.6;
+                    float2 rot = float2(kd.x * cos(kang) - kd.y * sin(kang), kd.x * sin(kang) + kd.y * cos(kang));
+                    u += (rot.x - kd.x) / 0.9;
+                    v += (rot.y - kd.y) / (0.35 * 1.6);
                 }
                 if (mat < 0.5)   // spongy → herbaceous → fibrous
                 {
                     float pore = smoothstep(0.34, 0.72, fbm2(float2(u * 10.0, v * 10.0)));
-                    float rib = pow(0.5 + 0.5 * cos(u * 6.2831 * 6.0 + (fbm2(float2(u * 4, v * 2)) - 0.5) * 2.0), 1.4);
-                    float fiber = pow(saturate(0.5 + 0.5 * sin(u * 6.2831 * 16.0 + fbm2(float2(u * 16, v * 2)) * 3.0)), 2.5);
+                    float rib = pow(0.5 + 0.5 * cos(u * 6.2831 * 6.0 + (fbm2(float2(u * 2, v * 1)) - 0.5) * 0.8), 1.4);
+                    float fiber = pow(saturate(0.5 + 0.5 * sin(u * 6.2831 * 9.0 + fbm2(float2(u * 6, v * 1.2)) * 0.9)), 2.5);
                     float h = mat < 0.25 ? lerp(pore, rib, mat / 0.25) : lerp(rib, fiber, (mat - 0.25) / 0.25);
                     return float4(h, lerp(float3(0.82, 0.88, 0.78), float3(1.06, 1.0, 0.9), h));
                 }
@@ -114,7 +129,7 @@ Shader "CLAY/Flora"
                 if (bark == 0)          // FURROWED (oak / mature pine): deep wavy vertical furrows
                 {
                     float2 p = float2(u * 7.0, v * 0.8);
-                    p.x += (fbm2(float2(u * 4.0, v * 0.6)) - 0.5) * 2.4;                 // warp → irregular, not stripey
+                    p.x += (fbm2(float2(u * 2.0, v * 0.35)) - 0.5) * 1.0;                 // warp → irregular, not stripey (big warp = swirls)
                     float ridge = abs(frac(p.x + fbm2(float2(p.x, p.y * 0.5))) - 0.5) * 2.0;
                     ridge = smoothstep(0.08, 0.7, ridge);
                     h = ridge * (0.82 + fbm2(float2(u * 20, v * 3.0)) * 0.18);
@@ -174,7 +189,7 @@ Shader "CLAY/Flora"
                     tint = lerp(float3(0.3, 0.22, 0.15), float3(0.62, 0.5, 0.36), h);
                 }
                 if (_BarkNoise > 0.001)
-                    h = saturate(h + (fbm2(float2(u * 26.0, v * 30.0)) - 0.5) * _BarkNoise);
+                    h = saturate(h + (fbm2(float2(u * 14.0, v * 10.0)) - 0.5) * _BarkNoise);
                 return float4(saturate(h), tint);
             }
 
@@ -380,7 +395,7 @@ Shader "CLAY/Flora"
                 // ambient occlusion: baked per vertex (uv.w — canopy interiors, undersides, crotches); older meshes without
                 // it fall back to "the base sits in the shade of the rest"
                 float bakedAO = i.uv.w > 0.001 ? i.uv.w : lerp(0.45, 1.0, saturate(i.hf * 1.4 + 0.15));
-                float3 ambient = SampleSH(N) * bakedAO;
+                float3 ambient = SurfSH(N) * bakedAO;
                 diffuse *= lerp(1.0, bakedAO, 0.3);                        // light filtering through the canopy
 
                 #if defined(_ADDITIONAL_LIGHTS)
@@ -394,7 +409,7 @@ Shader "CLAY/Flora"
 
                 float3 col = baseC * (ambient + diffuse) + mainL.color * spec;
                 // grazing-angle sheen (Fresnel) — waxy cuticles and wet flesh catch the sky at the silhouette
-                col += SampleSH(N) * pow(1.0 - saturate(dot(N, V)), 4.0) * 0.35 * (0.3 + localSmooth);
+                col += SurfSH(N) * pow(1.0 - saturate(dot(N, V)), 4.0) * 0.35 * (0.3 + localSmooth);
 
                 // Leaf translucency: thin membranes glow when backlit (light hitting the far side + viewing toward the sun).
                 if (_Translucency > 0.001)
@@ -406,6 +421,7 @@ Shader "CLAY/Flora"
                 }
 
                 col += _AccentColor.rgb * saturate(i.color.a) * _Glow * 1.5 + _BaseColor.rgb * _Glow * 0.25;
+                col += (_AccentColor.rgb * 0.8 + float3(0.1, 0.6, 0.55)) * _BioGlow * (0.3 + 0.7 * saturate(i.color.a + i.hf * 0.5));   // bioluminescent night
                 col *= lerp(1.0 - _Understorey * 0.55, 1.0, i.hf);   // understorey darkening
                 col = MixFog(col, i.fog);
                 col = (any(isnan(col)) || any(isinf(col))) ? float3(0, 0, 0) : max(col, 0);

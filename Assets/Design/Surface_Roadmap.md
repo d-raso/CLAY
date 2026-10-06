@@ -61,3 +61,36 @@ Big, recognisable features driven by each planet's geology, climate and history:
 - **Dunes** (done: warped fields), **badlands**, **karst** towers, **fjords**, **sea stacks**, **hoodoos**.
 - Tech notes: rivers/glaciers need a coarse global drainage pass (on the orbital height grid) sampled at surface
   scale; overhangs/caves need a second volumetric layer blended with the height field near the camera.
+
+---
+
+## 7. Planet archetypes & parameters from the design docs (logged 2026-09-30)
+`PlanetTypes.md` lists ~104 categories (11 families) and `PlanetaryParameters.md` a parameter set; about **25** display
+types exist today (Lava, Basaltic, Carbon, Copper, Corundum, Iron-Oxide, Metallic, Sulfur, Salt-Crust, Salt-Flat,
+Tholin, Methane, Ammonia-Ice, Ice (+subsurface ocean), Ocean, Living, Rocky + 6 giant subtypes + spin tags).
+
+**Missing causal parameters (do these FIRST — most categories fall out of them):**
+- atmospheric pressure as its own input (trace / thin / Earth / thick / supercritical) — today derived only from mass
+- atmospheric composition (N₂, O₂, CO₂, CH₄, NH₃, SO₂, H₂, He, H₂O vapour) → sky colour, greenhouse, haze, rain chemistry
+- magnetic field / dynamo → aurorae, atmosphere stripping by flares
+- liquid type (water / ammonia / methane / brine / supercritical) as an input, not a theme side-effect
+- redox / oxygenation state → grey ↔ rust ↔ organic-tar crust, banded-iron seas
+- tectonic mode as an editable input (mobile-lid / stagnant-lid / heat-pipe / dead)
+- spin resonance (3:2), binary planet, Trojan orbit; migration history; flare dosage history
+
+**Missing category families (after the parameters):**
+- A molten: silicate-vapor, glass-rain, chthonian (stripped giant core), obsidian, sublimation/comet-tail
+- B rocky: archipelago, pangaea, karst, canyon, steppe/savanna, cratered-dead, regolith/dust
+- C ocean: shallow-sea, storm-ocean, ice-capped, supercritical, hycean (H₂ + warm ocean), ammonia ocean, brine
+- D ice: glacier, Europa lineae, Enceladus plumes, N₂-ice (Triton/Pluto), CO₂ dry-ice, clathrate, dirty-ice, cryovolcanic
+- E toxic: Venusian greenhouse (obscured surface), chlorine, photochemical smog, ammonia haze, mercury vapor
+- F composition: tar/bitumen, super-Mercury, diamond, coreless, helium-dominated, water-vapor, iron-snow
+- G mass: super-/mega-Earth, sub-Earth, dwarf, puffy low-density
+- H biosphere: red / purple / black vegetation by star, fungal/lichen, microbial-mat seas, oxygenating, bioluminescent, post-biotic
+- I dynamics: twilight-ring habitable, 3:2 resonance, eccentric seasonal melt, Trojan, binary planet
+- J history: post-giant-impact / synestia, tidally-disrupted remnant, captured rogue, thawed migrant, flare-scoured, ejecta-dusted
+- K giants: ammonia/water-cloud giant, ringed giant (rings exist; make it a category)
+
+**Plan:** (1) DONE 2026-09-30 — PlanetPhysics.cs (pressure, AtmoComposition, magnetic, flare dose, LiquidType, redox, tectonics override, 3:2 spin) on PlanetData, wired into climate/atmosphere/sky tint/palette/surface sea + planet editor; (2) DONE 2026-09-30 — PlanetCategories.cs: Classify → ~100 categories + tags, Name, ApplyLook palette tweaks; DisplayType uses it. Was: derive categories from it in
+DisplayType/Chem; (3) DONE 2026-09-30 (first pass) — SurfaceGeo.category tunes landforms + terrain-type scores; SurfaceWeather category decks/storms/dust/fog; orbit: shrouded decks, aurorae (PlanetAtmosphere _Aurora), molten night glow (PlanetSurface _NightGlow), bioluminescent plants (_BioGlow). Still to do: Enceladus plumes, sublimation tails, rings-as-category; (4) expose all of
+it in the planet editor so every category can be dialled up directly.

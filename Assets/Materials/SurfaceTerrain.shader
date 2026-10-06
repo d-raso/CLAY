@@ -33,6 +33,7 @@ Shader "CLAY/SurfaceTerrain"
             #pragma multi_compile_instancing
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "Include/SurfAmbient.hlsl"
             #include "Include/Clouds.hlsl"
 
             CBUFFER_START(UnityPerMaterial)
@@ -289,9 +290,17 @@ Shader "CLAY/SurfaceTerrain"
                 // material colour: the type's own colour (ice, salt, sulfur, crust…) partly over the orbital colour
                 alb = lerp(alb, tintC, saturate(tintAmt) * 0.6) * lerp(float3(1, 1, 1), mul, mid * 0.85 + 0.15);
                 alb *= 1.0 - wet * 0.3;                               // damp ground is darker
+                float3 rockBump = 0;
                 [branch] if (_IsRock > 0.5)
                 {
                     float3 rp = p * 2.3;
+                    // rough, pitted surface: gradient of a 3D noise (chips, pits, lichen-scale grit) — no smooth plastic
+                    float3 rbP = p * 6.0; const float rbE = 0.07;
+                    float rb0 = fbm(rbP, 3);
+                    float3 rbG = float3(fbm(rbP + float3(rbE, 0, 0), 3), fbm(rbP + float3(0, rbE, 0), 3), fbm(rbP + float3(0, 0, rbE), 3)) - rb0;
+                    float gr0 = vn(p * 40.0);
+                    float3 g2 = float3(vn(p * 40.0 + float3(0.15, 0, 0)), vn(p * 40.0 + float3(0, 0.15, 0)), vn(p * 40.0 + float3(0, 0, 0.15))) - gr0;
+                    rockBump = (rbG / rbE) * 0.35 + (g2 / 0.15) * 0.08;
                     float mott = fbm(rp, 3), grain = vn(rp * 9.0);
                     alb = pow(max(i.color.rgb, 0.0), 2.2) * (0.78 + mott * 0.4) * (0.92 + grain * 0.16);
                     alb = max(alb, 0.02);
@@ -323,7 +332,7 @@ Shader "CLAY/SurfaceTerrain"
                 // geometric normal far away, where the tile would only alias
                 float dn = saturate(1.0 - dist / 900.0);
                 float3 Nd = normalize(float3(N.x + nxz.x * dn * 1.4, N.y, N.z + nxz.y * dn * 1.4));
-                if (_IsRock > 0.5) Nd = N;
+                if (_IsRock > 0.5) { float3 bt = rockBump - N * dot(rockBump, N); Nd = normalize(N - bt * dn); }
                 if (all(isfinite(Nd))) N = Nd;
 
                 // RIVERS & LAKES: the vertex marks liquid surface (+ flow direction). Glassy, the liquid's colour,
@@ -345,7 +354,12 @@ Shader "CLAY/SurfaceTerrain"
                     sparkle *= 1.0 - wmask; retro *= 1.0 - wmask;
                 }
 
-                Light L = GetMainLight(TransformWorldToShadowCoord(i.positionWS));
+                // Loose rocks: sample the shadow half a metre toward the sun. A pebble can't shadow itself any more (the
+                // sample point is outside it), but hill / tree shadows still land on it, and a big boulder's far side
+                // stays dark (the point is still inside the boulder).
+                float3 shadowPos = i.positionWS;
+                if (_IsRock > 0.5) shadowPos += _MainLightPosition.xyz * 0.5 + N * 0.05;
+                Light L = GetMainLight(TransformWorldToShadowCoord(shadowPos));
                 float3 Vd = normalize(_WorldSpaceCameraPos - i.positionWS);
                 float3 H = normalize(L.direction + Vd);
                 float ndl = saturate(dot(N, L.direction));
@@ -354,7 +368,6 @@ Shader "CLAY/SurfaceTerrain"
                 // Small loose rocks are only a few shadow-map texels across: they self-shadow into black blobs. They
                 // still receive most of the ground's shadow (a rock under a tree is darker), but never their own.
                 float shadowA = L.shadowAttenuation;
-                if (_IsRock > 0.5) shadowA = lerp(shadowA, 1.0, 0.7);
                 float3 lit = L.color * shadowA * L.distanceAttenuation * CloudShadow(p, L.direction);
 
                 // energy-normalised Blinn-Phong + Schlick fresnel; metals reflect in their own colour
@@ -372,9 +385,9 @@ Shader "CLAY/SurfaceTerrain"
                     float3 fn = normalize(float3(h13(cp + 3.1) - 0.5, 1.0, h13(cp + 7.7) - 0.5));
                     spec += pow(saturate(dot(fn, H)), 400.0) * step(0.93, h13(cp)) * sparkle * max(near * near, rockGlint * 0.6 * saturate(1.0 - dist / 120.0)) * 5.0;
                 }
-                float3 col = diffC * (SampleSH(N) * ao + lit * ndl * surge) + lit * spec * ndl * specC;
-                col += alb * SampleSH(reflect(-Vd, N)) * metal * smooth * 0.8;   // metals mirror the sky
-                col += SampleSH(reflect(-Vd, N)) * (fres - 0.04) * (0.25 + smooth * 0.75) * (1.0 - metal) * ao;   // dielectric sky sheen at grazing angles
+                float3 col = diffC * (SurfSH(N) * ao + lit * ndl * surge) + lit * spec * ndl * specC;
+                col += alb * SurfSH(reflect(-Vd, N)) * metal * smooth * 0.8;   // metals mirror the sky
+                col += SurfSH(reflect(-Vd, N)) * (fres - 0.04) * (0.25 + smooth * 0.75) * (1.0 - metal) * ao;   // dielectric sky sheen at grazing angles
                 col += emit;                                                     // molten rock glows
                 #if defined(_ADDITIONAL_LIGHTS) || defined(_ADDITIONAL_LIGHTS_VERTEX)
                 // other suns of a multiple-star system (and any other lights)

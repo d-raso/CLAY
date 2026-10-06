@@ -84,8 +84,11 @@ Shader "CLAY/PlanetClouds"
                 // Zonal-band TENDENCY without striping: compress the longitudinal axis so masses elongate east-west
                 // at high _Swirl, while latitude varies normally. At low _Swirl this is ~isotropic → turbulent,
                 // Earth-like cumulus puffs. (Terrestrial worlds use low _Swirl, so they read as churning weather.)
-                float lon = 1.0 / (1.0 + _Swirl * 2.5);
-                float3 sc = float3(rn.x * lon, rn.y, rn.z * lon);
+                // Squeeze the NORTH-SOUTH axis (scale y up) instead of shrinking x/z: masses still elongate east-west
+                // at low latitudes, but near the poles (where meridians lie in x/z) nothing is distorted — shrinking x/z
+                // made every cloud a streak converging on the pole.
+                float lon = 1.0 + _Swirl * 2.5;
+                float3 sc = float3(rn.x, rn.y * lon, rn.z);
 
                 // Domain-warped fBm — the warp (q) is what makes the masses swirl, curl and churn (turbulence),
                 // evolving in time so clouds form and dissipate rather than rigidly rotating.
